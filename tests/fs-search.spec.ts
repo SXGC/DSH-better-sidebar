@@ -16,7 +16,7 @@ vi.mock('@vscode/ripgrep', () => {
   throw new Error('optional ripgrep platform package is missing')
 })
 
-import { searchFiles, type FsSearchOptions } from '../src/fs-search.ts'
+import { searchFiles, type FsSearchOptions, type RunCommand } from '../src/fs-search.ts'
 
 /** Exercise the original traversal independently of tools installed on the host. */
 function searchWithJs(root: string, query: string, opts: FsSearchOptions = {}) {
@@ -70,6 +70,243 @@ describe('fs-search', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  it('runs fd with literal name-search arguments and normalizes its capped output', async () => {
+    const runCommand = vi.fn<RunCommand>(async () => ({
+      code: 0,
+      stdout: './-foo-zeta.md\0src\\-foo.md\0',
+      stderr: '',
+    }))
+
+    const result = await searchFiles('/workspace', '-foo', {
+      engine: 'fd',
+      maxMatches: 2,
+      resolvePackagedRg: async () => null,
+      runCommand,
+    })
+
+    expect(result).toEqual({ matches: ['-foo-zeta.md', 'src/-foo.md'], truncated: true })
+    expect(runCommand).toHaveBeenCalledOnce()
+    expect(runCommand).toHaveBeenCalledWith('fd', [
+      '-H',
+      '--no-ignore',
+      '-F',
+      '-i',
+      '--print0',
+      '--exclude',
+      '.git',
+      '--max-results',
+      '2',
+      '--',
+      '-foo',
+      '.',
+    ], { cwd: '/workspace', timeoutMs: 10_000 })
+    expect(runCommand.mock.calls[0]![1]).not.toContain('-t')
+    expect(runCommand.mock.calls[0]![1]).not.toContain('-L')
+  })
+
+  it('detects fd then fdfind before resolving packaged ripgrep', async () => {
+    const runCommand = vi.fn(async (command: string, args: readonly string[]) => {
+      if (args[0] === '--version') {
+        return command === 'fdfind'
+          ? { code: 0, stdout: 'fdfind 10', stderr: '' }
+          : { code: 127, stdout: '', stderr: 'not found' }
+      }
+      return { code: 0, stdout: 'src/util.ts\0', stderr: '' }
+    })
+    const resolvePackagedRg = vi.fn(async () => '/fake/packaged-rg')
+
+    const result = await searchFiles('/workspace', 'util', { runCommand, resolvePackagedRg })
+
+    expect(result).toEqual({ matches: ['src/util.ts'], truncated: false })
+    expect(runCommand.mock.calls.map(([command, args]) => [command, args])).toEqual([
+      ['fd', ['--version']],
+      ['fdfind', ['--version']],
+      ['fdfind', expect.arrayContaining(['-F', '--print0', '--', 'util', '.'])],
+    ])
+    expect(resolvePackagedRg).not.toHaveBeenCalled()
+  })
+
+  it('caches automatic detection and shares its in-flight promise', async () => {
+    let releaseProbe!: () => void
+    const probeGate = new Promise<void>(resolve => { releaseProbe = resolve })
+    const runCommand = vi.fn(async (_command: string, args: readonly string[]) => {
+      if (args[0] === '--version') {
+        await probeGate
+        return { code: 0, stdout: 'fd 10', stderr: '' }
+      }
+      return { code: 0, stdout: 'src/util.ts\0', stderr: '' }
+    })
+    const resolvePackagedRg = vi.fn(async () => null)
+
+    const first = searchFiles('/workspace', 'util', { runCommand, resolvePackagedRg })
+    const second = searchFiles('/workspace', 'util', { runCommand, resolvePackagedRg })
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(1))
+    releaseProbe()
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { matches: ['src/util.ts'], truncated: false },
+      { matches: ['src/util.ts'], truncated: false },
+    ])
+    await expect(searchFiles('/workspace', 'util', { runCommand, resolvePackagedRg })).resolves.toEqual({
+      matches: ['src/util.ts'],
+      truncated: false,
+    })
+    expect(runCommand.mock.calls.filter(([, args]) => args[0] === '--version')).toHaveLength(1)
+    expect(runCommand.mock.calls.filter(([, args]) => args[0] !== '--version')).toHaveLength(3)
+    expect(resolvePackagedRg).not.toHaveBeenCalled()
+  })
+
+  it('invalidates an fd command rejected with ENOENT and reselects the next tier', async () => {
+    const missing = Object.assign(new Error('fd disappeared'), { code: 'ENOENT' })
+    const runCommand = vi.fn(async (command: string, args: readonly string[]) => {
+      if (command === 'fd' && args[0] === '--version') return { code: 0, stdout: 'fd 10', stderr: '' }
+      if (command === 'fd') throw missing
+      if (command === 'fdfind') return { code: 127, stdout: '', stderr: 'not found' }
+      return { code: 0, stdout: 'src/util.ts\0', stderr: '' }
+    })
+    const resolvePackagedRg = vi.fn(async () => '/fake/rg')
+
+    await expect(searchFiles('/workspace', 'util', { runCommand, resolvePackagedRg })).resolves.toEqual({
+      matches: ['src/util.ts'],
+      truncated: false,
+    })
+    await expect(searchFiles('/workspace', 'util', { runCommand, resolvePackagedRg })).resolves.toEqual({
+      matches: ['src/util.ts'],
+      truncated: false,
+    })
+
+    expect(runCommand.mock.calls.map(([command, args]) => [command, args[0]])).toEqual([
+      ['fd', '--version'],
+      ['fd', '-H'],
+      ['fdfind', '--version'],
+      ['/fake/rg', '--no-config'],
+      ['/fake/rg', '--no-config'],
+    ])
+    expect(resolvePackagedRg).toHaveBeenCalledOnce()
+  })
+
+  it('shares redetection when concurrent fd searches both reject with ENOENT', async () => {
+    const missing = Object.assign(new Error('fd disappeared'), { code: 'ENOENT' })
+    const runCommand = vi.fn(async (command: string, args: readonly string[]) => {
+      if (command === 'fd' && args[0] === '--version') return { code: 0, stdout: 'fd 10', stderr: '' }
+      if (command === 'fd') throw missing
+      if (command === 'fdfind') return { code: 127, stdout: '', stderr: 'not found' }
+      return { code: 0, stdout: 'src/util.ts\0', stderr: '' }
+    })
+    const resolvePackagedRg = vi.fn(async () => '/fake/rg')
+
+    await Promise.all([
+      searchFiles('/workspace', 'util', { runCommand, resolvePackagedRg }),
+      searchFiles('/workspace', 'util', { runCommand, resolvePackagedRg }),
+    ])
+
+    expect(runCommand.mock.calls.filter(([command, args]) => command === 'fdfind' && args[0] === '--version')).toHaveLength(1)
+  })
+
+  it('keeps a discovered fd command cached after an ordinary search rejection', async () => {
+    const runCommand = vi.fn(async (command: string, args: readonly string[]) => {
+      if (command === 'fd' && args[0] === '--version') return { code: 0, stdout: 'fd 10', stderr: '' }
+      if (command === 'fd') throw new Error('timed out')
+      return { code: 0, stdout: 'src/util.ts\0', stderr: '' }
+    })
+    const resolvePackagedRg = vi.fn(async () => '/fake/rg')
+
+    await searchFiles('/workspace', 'util', { runCommand, resolvePackagedRg })
+    await searchFiles('/workspace', 'util', { runCommand, resolvePackagedRg })
+
+    expect(runCommand.mock.calls.map(([command, args]) => [command, args[0]])).toEqual([
+      ['fd', '--version'],
+      ['fd', '-H'],
+      ['/fake/rg', '--no-config'],
+      ['fd', '-H'],
+      ['/fake/rg', '--no-config'],
+    ])
+    expect(resolvePackagedRg).toHaveBeenCalledOnce()
+  })
+
+  it('caches missing PATH probes after selecting PATH ripgrep', async () => {
+    const runCommand = vi.fn(async (command: string, args: readonly string[]) => {
+      if (args[0] === '--version') {
+        return command === 'rg'
+          ? { code: 0, stdout: 'ripgrep 14', stderr: '' }
+          : { code: 127, stdout: '', stderr: 'not found' }
+      }
+      return { code: 0, stdout: 'src/util.ts\0', stderr: '' }
+    })
+    const resolvePackagedRg = vi.fn(async () => null)
+
+    await searchFiles('/workspace', 'util', { runCommand, resolvePackagedRg })
+    await searchFiles('/workspace', 'util', { runCommand, resolvePackagedRg })
+
+    expect(runCommand.mock.calls.map(([command, args]) => [command, args[0]])).toEqual([
+      ['fd', '--version'],
+      ['fdfind', '--version'],
+      ['rg', '--version'],
+      ['rg', '--no-config'],
+      ['rg', '--no-config'],
+    ])
+    expect(resolvePackagedRg).toHaveBeenCalledOnce()
+  })
+
+  it('matches the JS result set for directories, hidden and ignored entries through fd', async () => {
+    const dir = makeFixture()
+    mkdirSync(join(dir, 'MatchDir'))
+    mkdirSync(join(dir, '.hidden-match'))
+    writeFileSync(join(dir, 'ignored-match.txt'), 'visible despite ignore rules')
+    writeFileSync(join(dir, '.gitignore'), 'ignored-match.txt\n')
+    const runCommand = vi.fn(async () => ({
+      code: 0,
+      stdout: './ignored-match.txt\0.hidden-match\0MatchDir\0',
+      stderr: '',
+    }))
+    try {
+      const js = await searchWithJs(dir, 'MATCH')
+      const fd = await searchFiles(dir, 'MATCH', {
+        engine: 'fd',
+        resolvePackagedRg: async () => null,
+        runCommand,
+      })
+
+      expect(fd).toEqual(js)
+      expect(fd).toEqual({
+        matches: ['.hidden-match', 'MatchDir', 'ignored-match.txt'],
+        truncated: false,
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('passes a dotted fd query as a fixed string', async () => {
+    const runCommand = vi.fn<RunCommand>(async () => ({ code: 0, stdout: 'README.md\0', stderr: '' }))
+
+    await searchFiles('/workspace', '.md', {
+      engine: 'fd',
+      resolvePackagedRg: async () => null,
+      runCommand,
+    })
+
+    expect(runCommand.mock.calls[0]![1]).toEqual(expect.arrayContaining(['-F', '--', '.md', '.']))
+  })
+
+  it('falls through the rg chain when the forced fd seam fails', async () => {
+    const runCommand = vi.fn<RunCommand>(async command => command === 'fd'
+      ? { code: 2, stdout: '', stderr: 'fd failed' }
+      : { code: 0, stdout: 'src/util.ts\0', stderr: '' })
+
+    const result = await searchFiles('/workspace', 'util', {
+      engine: 'fd',
+      resolvePackagedRg: async () => '/fake/rg',
+      runCommand,
+    })
+
+    expect(result).toEqual({ matches: ['src/util.ts'], truncated: false })
+    expect(runCommand.mock.calls.map(([command, args]) => [command, args[0]])).toEqual([
+      ['fd', '-H'],
+      ['/fake/rg', '--no-config'],
+    ])
   })
 
   it('uses ripgrep file output to reconstruct matching files and directories', async () => {
@@ -143,7 +380,9 @@ describe('fs-search', () => {
   })
 
   it('prefers packaged ripgrep to PATH ripgrep in automatic mode', async () => {
-    const runCommand = vi.fn(async () => ({ code: 0, stdout: 'src/util.ts\0', stderr: '' }))
+    const runCommand = vi.fn(async (_command: string, args: readonly string[]) => args[0] === '--version'
+      ? { code: 127, stdout: '', stderr: 'not found' }
+      : { code: 0, stdout: 'src/util.ts\0', stderr: '' })
 
     const result = await searchFiles('/workspace', 'util', {
       resolvePackagedRg: async () => '/fake/packaged-rg',
@@ -151,7 +390,7 @@ describe('fs-search', () => {
     })
 
     expect(result).toEqual({ matches: ['src/util.ts'], truncated: false })
-    expect(runCommand).toHaveBeenCalledTimes(1)
+    expect(runCommand).toHaveBeenCalledTimes(3)
     expect(runCommand).toHaveBeenCalledWith('/fake/packaged-rg', expect.any(Array), {
       cwd: '/workspace',
       timeoutMs: 10_000,
