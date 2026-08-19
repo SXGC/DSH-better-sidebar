@@ -130,6 +130,25 @@ export interface SidebarSlotsService {
   inject(key: string, callback: () => () => void): () => void
 }
 
+/** Commit-aligned layout projection used by the official right-sidebar owner. */
+export interface SidebarLayoutSnapshot {
+  readonly mode: 'desktop' | 'mobile'
+  readonly mobileSurface: 'sidebar' | 'details' | 'right-sidebar' | null
+  readonly detailsAvailable: boolean
+  readonly rightSidebarAvailable: boolean
+}
+
+/** Structural mirror of ui-layout-tokenx's public ctx.layout face. */
+export interface SidebarLayoutService {
+  readonly snapshot: {
+    getSnapshot(): SidebarLayoutSnapshot
+    subscribe(fn: () => void): () => void
+  }
+  openRightSidebar(): void
+  closeRightSidebar(): void
+  toggleRightSidebar(): void
+}
+
 /** The client session list row the sidebar reads (cwd for the explorer). */
 export interface SidebarSessionSummary {
   id: string
@@ -418,6 +437,7 @@ declare module 'cordis' {
     connection: SidebarConnectionHandle
     webRuntime: SidebarWebRuntime
     slots: SidebarSlotsService
+    layout: SidebarLayoutService
     workspaces: SidebarWorkspacesService
     settings: SidebarSettingsService
     invariants: SidebarInvariantsService

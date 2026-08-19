@@ -9,11 +9,11 @@
  *  1. seeds one workspace + one session through the host's own RPC surface
  *     (the same `workspace.create` / `session.create` calls the UI makes),
  *     so the sidebar has a real session to render;
- *  2. loads the page in headless Chromium and asserts the shell and the
- *     plugin's `[data-dsh-better-sidebar]` host mount;
+ *  2. loads the page in headless Chromium and asserts the plugin occupant
+ *     lives inside the official `right-sidebar` region;
  *  3. asserts the plugin's crash markers never appear (no RenderBoundary /
  *     fail() strips, no `pageerror`, no plugin-prefixed console errors);
- *  4. expands the collapsed panel (openByDefault defaults off), sweeps every
+ *  4. opens the official fourth track from `shell.overlay`, sweeps every
  *     built-in tab (Files / Source Control / Tasks / Terminal / Browser) —
  *     including the lazily-fetched terminal chunk — and then opens seeded
  *     files through the Files window's tree (in-place mode: the seeded home
@@ -118,8 +118,8 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
     if (message.type() === 'error') consoleErrors.push(message.text())
   })
 
-  // Load the shell. The app renders into #root; the plugin appends its own
-  // [data-dsh-better-sidebar] host once its client half activates.
+  // Load the shell. The plugin contributes an occupant to the official
+  // right-sidebar region; it never appends a sibling portal to body.
   //
   // The editor chunk (client-editor.js) loads as soon as ANY files-window tab
   // renders — the seeded home tab mounts the moment the panel expands, long
@@ -131,8 +131,9 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
   )
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
   await expect(page.locator('#root > *')).not.toHaveCount(0, { timeout: 90_000 })
-  const sidebar = page.locator('[data-dsh-better-sidebar]')
+  const sidebar = page.locator('[data-layout-region="right-sidebar"] [data-dsh-better-sidebar]')
   await expect(sidebar).toBeAttached({ timeout: 90_000 })
+  await expect(page.locator('body > [data-dsh-better-sidebar]')).toHaveCount(0)
 
   // A keyless boot stacks onboarding takeovers that mask the whole shell: a
   // versioned welcome notice ("Continue", persists its acknowledgement to
@@ -172,21 +173,36 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
   const tabBar = sidebar.locator('[title]')
   await expect(tabBar.first()).toBeAttached({ timeout: 90_000 })
 
-  // openByDefault defaults OFF: a fresh session's panel starts collapsed.
-  // Expand it through the toggle cluster before the layout push can apply.
-  const expandButton = sidebar.getByRole('button', { name: 'Expand sidebar' })
-  await expect(expandButton, 'the collapsed toggle cluster must offer the expand button').toHaveCount(1)
+  // openByDefault defaults OFF. The shell-overlay control remains clickable
+  // while the fourth track is zero; opening must narrow the official
+  // conversation track and expose only the AppFrame's resize handle.
+  const toggles = page.locator('[data-shell-overlay] [data-dsh-better-sidebar-toggles]')
+  const expandButton = toggles.getByRole('button', { name: 'Expand sidebar' })
+  await expect(expandButton, 'shell.overlay must offer the collapsed right-sidebar toggle').toHaveCount(1)
+  const conversation = page.locator('[data-layout-region="conversation"]')
+  const closedConversationWidth = await conversation.evaluate(element => element.getBoundingClientRect().width)
   await expandButton.click()
+  await expect(page.locator('[data-side="right-sidebar"]'), 'the official fourth-track handle must be present').toHaveCount(1)
+  await expect.poll(
+    () => conversation.evaluate(element => element.getBoundingClientRect().width),
+    { timeout: 90_000 },
+  ).toBeLessThan(closedConversationWidth)
+  expect(await page.locator('#root').evaluate(element => getComputedStyle(element).marginRight)).toBe('0px')
 
-  // The skinning contract is token-driven (AGENTS.md §8): the panels consume
-  // `--dsw-alias-bg-layer-1`, so switching a skin re-skins the sidebar with
-  // no per-skin code. The layout push variable must be live once the panel
-  // mounts (its absence would mean the panel never opened with the session).
-  await expect
-    .poll(async () => (
-      await page.evaluate(() => document.documentElement.style.getPropertyValue('--dsh-sidebar-width'))
-    ), { timeout: 90_000 })
-    .not.toBe('')
+  // Closing returns the fourth track to zero without removing the overlay
+  // entry; reopen once more so the built-in sweep below exercises the same
+  // user path a collapsed desktop user has.
+  const collapseButton = toggles.getByRole('button', { name: 'Collapse sidebar' })
+  await expect(collapseButton).toHaveCount(1)
+  await collapseButton.click()
+  await expect(page.locator('[data-side="right-sidebar"]')).toHaveCount(0)
+  await expect(expandButton).toHaveCount(1)
+  await expect.poll(
+    () => conversation.evaluate(element => element.getBoundingClientRect().width),
+    { timeout: 90_000 },
+  ).toBeGreaterThanOrEqual(closedConversationWidth - 1)
+  await expandButton.click()
+  await expect(page.locator('[data-side="right-sidebar"]')).toHaveCount(1)
 
   // Crash-marker assertions shared by every step.
   const assertNoCrash = async (): Promise<void> => {

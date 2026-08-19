@@ -1,21 +1,22 @@
 /**
  * Client half of dsh-better-sidebar: resolves the user's "Side card"
- * preferences through the plugin's own fenced settings route, mounts the
- * right sidebar portal (inside an error boundary so a rendering failure
- * shows an error strip instead of a blank panel), registers the turn-tail
+ * preferences through the plugin's own fenced settings route, contributes
+ * the official right-sidebar occupant (inside an error boundary so a render
+ * failure shows an error strip instead of a blank panel), registers the turn-tail
  * interception, and contributes the Side card settings section to the DSH
  * Settings shell. Requires the runtime's slots and sessions services; the
  * bundle itself is a module-table consumer only (react + ui-primitives +
  * xterm, all provided or inlined).
  */
 import { createElement } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
 import type { Context } from '../context-types.ts'
 import { allLeaves, createSidebarStore, isAgentTabId } from './state.ts'
 import { createBetterSidebarService, matchUrlTarget } from './service.ts'
 import { resetChunks } from './chunk-loader.ts'
 import { registerBuiltins } from './builtins/index.ts'
 import { Sidebar } from './Sidebar.tsx'
+import { createRightSidebarOwnerSource, Occupant, type RightSidebarOwnerProps } from './Occupant.tsx'
+import { ToggleCluster } from './ToggleCluster.tsx'
 import { RenderBoundary } from './RenderBoundary.tsx'
 import { registerOpenPathInterception, registerTurnTailInterception } from './intercept.tsx'
 import { registerLinkInterception } from './link-intercept.ts'
@@ -30,7 +31,7 @@ import './layout.css'
 
 /** Services required before mounting (provided by the client runtime; the
  *  locale service backs the sidebar's copy — see locales.ts). */
-export const inject = ['slots', 'sessions', 'connection', 'workspaces', 'locale']
+export const inject = ['slots', 'sessions', 'connection', 'workspaces', 'locale', 'layout']
 
 /**
  * Error boundary over the sidebar tree (root scope): a render error in the
@@ -44,6 +45,26 @@ export const inject = ['slots', 'sessions', 'connection', 'workspaces', 'locale'
  * @param ctx - the client cordis context (slots, sessions).
  */
 export function apply(ctx: Context): void {
+  // A failure anywhere in the client lifecycle must never take the app down
+  // silently: log with the plugin prefix and pin a visible diagnostic strip
+  // to the page so a missing required layout is never the only symptom.
+  const fail = (phase: string, error: unknown): void => {
+    console.error(`[dsh-better-sidebar] ${phase} error:`, error)
+    try {
+      const bar = document.createElement('div')
+      bar.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:2147483000;max-width:70vw;padding:8px 12px;'
+        + 'font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#f2a1a1;background:#1b1b22;'
+        + 'border:1px solid #f2a1a1;border-radius:8px;white-space:pre-wrap'
+      bar.textContent = `[dsh-better-sidebar] ${phase} error: ${error instanceof Error ? error.message : String(error)}`
+      document.body.appendChild(bar)
+    } catch {
+      // Nothing left to report with.
+    }
+  }
+  if ((ctx as Partial<Context>).layout === undefined) {
+    fail('layout', new Error('required layout service is unavailable; right-sidebar occupant was not registered'))
+    return
+  }
   // The sidebar follows the DSH i18n system: attach the locale service so
   // the module-level t()/isZh() resolve the Host-backed language preference
   // (and switch live — the Sidebar root subscribes to it), and register the
@@ -60,6 +81,7 @@ export function apply(ctx: Context): void {
   // registrations (the official createXXXStore() factory rule — no
   // module-level singleton).
   const sidebarStore = createSidebarStore()
+  const ownerSource = createRightSidebarOwnerSource()
   // The sidebar registry service: external plugins register tab types and
   // file previewers through `ctx.betterSidebar.registerTab/registerFileViewer`.
   // Published before the panel mounts so consumers injecting 'betterSidebar'
@@ -93,22 +115,6 @@ export function apply(ctx: Context): void {
     () => registerBuiltins(ctx, service, { terminalTitle: () => terminalTitle }),
     'dsh-better-sidebar: register built-in tabs and viewers',
   )
-  // A failure anywhere in the client lifecycle must never take the app down
-  // silently: log with the plugin prefix and pin a visible diagnostic strip
-  // to the page so a blank panel is never the only symptom.
-  const fail = (phase: string, error: unknown): void => {
-    console.error(`[dsh-better-sidebar] ${phase} error:`, error)
-    try {
-      const bar = document.createElement('div')
-      bar.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:2147483000;max-width:70vw;padding:8px 12px;'
-        + 'font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#f2a1a1;background:#1b1b22;'
-        + 'border:1px solid #f2a1a1;border-radius:8px;white-space:pre-wrap'
-      bar.textContent = `[dsh-better-sidebar] ${phase} error: ${error instanceof Error ? error.message : String(error)}`
-      document.body.appendChild(bar)
-    } catch {
-      // Nothing left to report with.
-    }
-  }
   try {
     // Fresh chunk state for this activation: invalidate any chunk factories
     // registered by a previous fiber (HMR) and drop the in-memory load cache
@@ -116,28 +122,58 @@ export function apply(ctx: Context): void {
     resetChunks()
     ctx.effect(() => {
       let disposed = false
-      let root: Root | undefined
-      let host: HTMLDivElement | undefined
-      let mounted = false
+      let disposeSlots: (() => void) | undefined
       const unmount = (): void => {
-        if (!mounted) return
-        mounted = false
-        root?.unmount()
-        root = undefined
-        host?.remove()
-        host = undefined
+        disposeSlots?.()
+        disposeSlots = undefined
       }
       const mount = (): void => {
-        if (mounted || disposed) return
+        if (disposeSlots !== undefined || disposed) return
         try {
-          host = document.createElement('div')
-          host.setAttribute('data-dsh-better-sidebar', '')
-          document.body.appendChild(host)
-          root = createRoot(host)
-          root.render(createElement(RenderBoundary, { className: css.boundaryError }, createElement(Sidebar, { ctx, store: sidebarStore })))
-          mounted = true
+          const offOccupant = ctx.slots.inject('right-sidebar', () => {
+            try {
+              return ctx.slots.register({
+                name: 'right-sidebar',
+                inject: () => ({
+                  publishOwner: ownerSource.publish,
+                  renderWorkbench: (owner: RightSidebarOwnerProps) => createElement(
+                    RenderBoundary,
+                    { className: css.boundaryError },
+                    createElement(Sidebar, { ctx, store: sidebarStore, ...owner }),
+                  ),
+                }),
+              }, Occupant)
+            } catch (error) {
+              fail('right-sidebar occupant', error)
+              return () => {}
+            }
+          })
+          try {
+            const offToggle = ctx.slots.inject('shell.overlay', () => {
+              try {
+                return ctx.slots.register({
+                  name: 'shell.overlay',
+                  id: 'better-sidebar.toggle',
+                  inject: () => ({
+                    store: sidebarStore,
+                    layoutSnapshot: ctx.layout.snapshot,
+                    ownerSnapshot: ownerSource,
+                    localeSnapshot: ctx.locale,
+                    toggleRightSidebar: () => { ctx.layout.toggleRightSidebar() },
+                  }),
+                }, ToggleCluster)
+              } catch (error) {
+                fail('shell.overlay toggle', error)
+                return () => {}
+              }
+            })
+            disposeSlots = () => { offToggle(); offOccupant() }
+          } catch (error) {
+            offOccupant()
+            throw error
+          }
         } catch (error) {
-          fail('mount', error)
+          fail('right-sidebar slots', error)
         }
       }
       const sync = async (): Promise<void> => {
@@ -174,7 +210,7 @@ export function apply(ctx: Context): void {
         offRemote?.()
         unmount()
       }
-    }, 'dsh-better-sidebar: sidebar mount')
+    }, 'dsh-better-sidebar: right-sidebar occupant')
 
     ctx.effect(
       () => {
