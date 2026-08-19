@@ -1,17 +1,17 @@
 /**
- * Recursive file-name search for the editor's merged-mode side panel.
- * Streams the tree with opendir and matches the query as a case-insensitive
- * substring of each entry's NAME (paths stay relative to the search root —
- * the client resolves them against the session cwd). No .gitignore semantics
- * (this is a name lookup, not a code search), but `.git` directories are
- * skipped outright (VCS internals are never useful results) and symlink
- * directories are NOT descended (cycle safety).
+ * Recursive file-name search for the editor's merged-mode side panel. Native
+ * file listing is preferred when available, with the original opendir walk as
+ * the fallback. The query is a case-insensitive substring of each entry's
+ * NAME (paths stay relative to the search root — the client resolves them
+ * against the session cwd). No engine applies .gitignore semantics; `.git`
+ * directories are skipped outright and symlink directories are not followed.
  *
  * Two performance budgets bound the walk: `maxMatches` (the client renders
  * the flat list) and `maxVisited` (a runaway tree — a home directory root,
  * a node_modules forest — must not stall the host). Exceeding either stops
  * early with `truncated: true`.
  */
+import { spawn } from 'node:child_process'
 import { opendir } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 
@@ -22,23 +22,299 @@ export interface FsSearchResult {
   truncated: boolean
 }
 
-/** Search budgets (both injectable for tests). */
+/** Injectable argv-vector command runner used by the native search adapters. */
+export type RunCommand = (
+  command: string,
+  args: readonly string[],
+  opts: { cwd?: string; timeoutMs: number },
+) => Promise<{ code: number; stdout: string; stderr: string }>
+
+/** Search budgets and native-engine seams. */
 export interface FsSearchOptions {
   /** Row cap of the result list (default 200). */
   maxMatches?: number
   /** Total entries visited before the walk gives up (default 100_000). */
   maxVisited?: number
+  /** Test seam for selecting or bypassing native-engine discovery. */
+  engine?: 'auto' | 'fd' | 'rg' | 'js'
+  /** Test seam replacing the argv-vector child-process runner. */
+  runCommand?: RunCommand
+  /** Test seam replacing lazy resolution of the packaged ripgrep binary. */
+  resolvePackagedRg?: () => Promise<string | null>
 }
 
 const DEFAULT_MAX_MATCHES = 200
 const DEFAULT_MAX_VISITED = 100_000
+const NATIVE_TIMEOUT_MS = 10_000
+const PROBE_TIMEOUT_MS = 1_000
+
+type DetectedEngine =
+  | { kind: 'fd'; command: 'fd' | 'fdfind' }
+  | { kind: 'rg'; command: string }
+  | { kind: 'js' }
+
+type ResolvePackagedRg = () => Promise<string | null>
+
+interface DetectionState {
+  promise?: Promise<DetectedEngine>
+  selected?: DetectedEngine
+  unavailable: Set<string>
+}
+
+interface NativeSearchAttempt {
+  result?: FsSearchResult
+  missing: boolean
+}
+
+const detectionStates = new WeakMap<RunCommand, WeakMap<ResolvePackagedRg, DetectionState>>()
+const packagedRgResolutionPromises = new WeakMap<ResolvePackagedRg, Promise<string | null>>()
+
+let packagedRgPathPromise: Promise<string | null> | undefined
+
+/** Resolve the packaged ripgrep path once without making module loading eager. */
+async function resolvePackagedRg(): Promise<string | null> {
+  packagedRgPathPromise ??= import('@vscode/ripgrep')
+    .then(module => module.rgPath || null)
+    .catch(() => null)
+  return await packagedRgPathPromise
+}
+
+/** Memoize injected and production packaged-rg resolution, including failure. */
+function resolvePackagedRgCached(resolveRg: ResolvePackagedRg): Promise<string | null> {
+  let promise = packagedRgResolutionPromises.get(resolveRg)
+  if (promise === undefined) {
+    promise = Promise.resolve()
+      .then(resolveRg)
+      .then(path => path || null)
+      .catch(() => null)
+    packagedRgResolutionPromises.set(resolveRg, promise)
+  }
+  return promise
+}
+
+/** Select the first available native engine in semantic-preference order. */
+async function detectEngine(
+  run: RunCommand,
+  resolveRg: ResolvePackagedRg,
+  unavailable: Set<string>,
+): Promise<DetectedEngine> {
+  for (const command of ['fd', 'fdfind'] as const) {
+    if (unavailable.has(command)) continue
+    const available = await run(command, ['--version'], { timeoutMs: PROBE_TIMEOUT_MS })
+      .then(result => result.code === 0)
+      .catch(() => false)
+    if (available) return { kind: 'fd', command }
+    unavailable.add(command)
+  }
+  const rgPath = await resolvePackagedRgCached(resolveRg)
+  if (rgPath !== null && !unavailable.has(rgPath)) return { kind: 'rg', command: rgPath }
+  if (unavailable.has('rg')) return { kind: 'js' }
+  const pathRg = await run('rg', ['--version'], { timeoutMs: PROBE_TIMEOUT_MS })
+    .then(result => result.code === 0)
+    .catch(() => false)
+  if (!pathRg) unavailable.add('rg')
+  return pathRg ? { kind: 'rg', command: 'rg' } : { kind: 'js' }
+}
+
+/** Return the process-local discovery state for one production or test seam. */
+function getDetectionState(run: RunCommand, resolveRg: ResolvePackagedRg): DetectionState {
+  let byResolver = detectionStates.get(run)
+  if (byResolver === undefined) {
+    byResolver = new WeakMap()
+    detectionStates.set(run, byResolver)
+  }
+  let state = byResolver.get(resolveRg)
+  if (state === undefined) {
+    state = { unavailable: new Set() }
+    byResolver.set(resolveRg, state)
+  }
+  return state
+}
+
+/** Cache both successful and exhausted discovery; concurrent callers share the promise. */
+function detectEngineCached(run: RunCommand, resolveRg: ResolvePackagedRg): Promise<DetectedEngine> {
+  const state = getDetectionState(run, resolveRg)
+  if (state.promise === undefined) {
+    const promise = detectEngine(run, resolveRg, state.unavailable)
+    state.promise = promise
+    void promise.then((selected) => {
+      if (state.promise === promise) state.selected = selected
+    })
+  }
+  return state.promise
+}
+
+/** Forget a command that disappeared after discovery and select again next time. */
+function invalidateCommand(run: RunCommand, resolveRg: ResolvePackagedRg, command: string): void {
+  const state = getDetectionState(run, resolveRg)
+  state.unavailable.add(command)
+  const selected = state.selected
+  if (selected !== undefined && selected.kind !== 'js' && selected.command === command) {
+    state.promise = undefined
+    state.selected = undefined
+  }
+}
+
+/** Identify only spawn's command-not-found rejection, not ordinary failures. */
+function isCommandMissing(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
+}
+
+/** Run a command without a shell and collect its UTF-8 output. */
+function runCommand(command: string, args: readonly string[], opts: { cwd?: string; timeoutMs: number }): ReturnType<RunCommand> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [...args], { cwd: opts.cwd })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => { stdout += chunk })
+    child.stderr.on('data', (chunk: string) => { stderr += chunk })
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      child.kill()
+      reject(new Error(`${command} timed out after ${opts.timeoutMs}ms`))
+    }, opts.timeoutMs)
+    child.once('error', (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(error)
+    })
+    child.once('close', (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ code: code ?? -1, stdout, stderr })
+    })
+  })
+}
+
+const RG_ARGS = [
+  '--no-config',
+  '--files',
+  '--hidden',
+  '--no-ignore',
+  '--no-follow',
+  '--glob',
+  '!.git',
+  '--glob',
+  '!.git/**',
+  '--null',
+] as const
+
+/** List matching entries with fd using the same name semantics as the JS walk. */
+async function searchWithFd(
+  command: 'fd' | 'fdfind',
+  root: string,
+  query: string,
+  maxMatches: number,
+  run: RunCommand,
+): Promise<NativeSearchAttempt> {
+  const args = [
+    '-H',
+    '--no-ignore',
+    '-F',
+    '-i',
+    '--print0',
+    '--exclude',
+    '.git',
+    '--max-results',
+    String(maxMatches),
+    '--',
+    query,
+    '.',
+  ]
+  let result: Awaited<ReturnType<RunCommand>>
+  try {
+    result = await run(command, args, { cwd: root, timeoutMs: NATIVE_TIMEOUT_MS })
+  } catch (error) {
+    return { missing: isCommandMissing(error) }
+  }
+  if (result.code !== 0) return { missing: false }
+  const matches = result.stdout
+    .split('\0')
+    .filter(Boolean)
+    .slice(0, maxMatches)
+    .map(path => path.replaceAll('\\', '/').replace(/^\.\//, ''))
+    .sort()
+  return { result: { matches, truncated: matches.length >= maxMatches }, missing: false }
+}
+
+/** List files with ripgrep and rebuild matching path prefixes. */
+async function searchWithRg(
+  command: string,
+  root: string,
+  needle: string,
+  maxMatches: number,
+  run: RunCommand,
+): Promise<NativeSearchAttempt> {
+  let result: Awaited<ReturnType<RunCommand>>
+  try {
+    result = await run(command, RG_ARGS, { cwd: root, timeoutMs: NATIVE_TIMEOUT_MS })
+  } catch (error) {
+    return { missing: isCommandMissing(error) }
+  }
+  if (result.code !== 0 && result.code !== 1) return { missing: false }
+
+  const matches = new Set<string>()
+  let truncated = false
+  for (const rawPath of result.stdout.split('\0')) {
+    const normalized = rawPath.replaceAll('\\', '/').replace(/^\.\//, '')
+    if (normalized === '') continue
+    const segments = normalized.split('/')
+    for (let index = 0; index < segments.length; index += 1) {
+      if (!segments[index]!.toLowerCase().includes(needle)) continue
+      matches.add(segments.slice(0, index + 1).join('/'))
+      if (matches.size >= maxMatches) {
+        truncated = true
+        break
+      }
+    }
+    if (truncated) break
+  }
+  return { result: { matches: [...matches].sort(), truncated }, missing: false }
+}
+
+/** Try packaged then PATH ripgrep for a forced engine or fd fallback. */
+async function searchRgChain(
+  root: string,
+  needle: string,
+  maxMatches: number,
+  run: RunCommand,
+  resolveRg: ResolvePackagedRg,
+  skipPackaged = false,
+): Promise<FsSearchResult | undefined> {
+  const state = getDetectionState(run, resolveRg)
+  if (!skipPackaged) {
+    const rgPath = await resolvePackagedRgCached(resolveRg)
+    if (rgPath !== null && !state.unavailable.has(rgPath)) {
+      const attempt = await searchWithRg(rgPath, root, needle, maxMatches, run)
+      if (attempt.result !== undefined) return attempt.result
+      if (attempt.missing) state.unavailable.add(rgPath)
+    }
+  }
+  if (state.unavailable.has('rg')) return undefined
+  const pathRg = await run('rg', ['--version'], { timeoutMs: PROBE_TIMEOUT_MS })
+    .then(result => result.code === 0)
+    .catch(() => false)
+  if (!pathRg) {
+    state.unavailable.add('rg')
+    return undefined
+  }
+  const attempt = await searchWithRg('rg', root, needle, maxMatches, run)
+  if (attempt.missing) state.unavailable.add('rg')
+  return attempt.result
+}
 
 /**
  * Search `root` recursively for entries whose name contains `query`
  * (case-insensitive).
  * @param root - absolute search root.
  * @param query - the name substring; empty matches nothing.
- * @param opts - budget overrides (tests).
+ * @param opts - budget overrides and injectable native-engine seams.
  * @returns the matching paths RELATIVE to `root` ('/'-separated), sorted,
  *  plus whether a budget cut the walk short. An unreadable level is skipped
  *  (permission errors never fail the whole search).
@@ -48,6 +324,41 @@ export async function searchFiles(root: string, query: string, opts: FsSearchOpt
   if (needle === '') return { matches: [], truncated: false }
   const maxMatches = opts.maxMatches ?? DEFAULT_MAX_MATCHES
   const maxVisited = opts.maxVisited ?? DEFAULT_MAX_VISITED
+
+  if (opts.engine !== 'js') {
+    const run = opts.runCommand ?? runCommand
+    const resolveRg = opts.resolvePackagedRg ?? resolvePackagedRg
+    if (opts.engine === undefined || opts.engine === 'auto') {
+      while (true) {
+        const detected = await detectEngineCached(run, resolveRg)
+        if (detected.kind === 'js') break
+        const attempt = detected.kind === 'fd'
+          ? await searchWithFd(detected.command, root, query.trim(), maxMatches, run)
+          : await searchWithRg(detected.command, root, needle, maxMatches, run)
+        if (attempt.result !== undefined) return attempt.result
+        if (attempt.missing) {
+          invalidateCommand(run, resolveRg, detected.command)
+          continue
+        }
+        if (detected.kind === 'fd') {
+          const fallback = await searchRgChain(root, needle, maxMatches, run, resolveRg)
+          if (fallback !== undefined) return fallback
+        } else if (detected.command !== 'rg') {
+          const fallback = await searchRgChain(root, needle, maxMatches, run, resolveRg, true)
+          if (fallback !== undefined) return fallback
+        }
+        break
+      }
+    } else {
+      if (opts.engine === 'fd') {
+        const attempt = await searchWithFd('fd', root, query.trim(), maxMatches, run)
+        if (attempt.result !== undefined) return attempt.result
+        if (attempt.missing) invalidateCommand(run, resolveRg, 'fd')
+      }
+      const result = await searchRgChain(root, needle, maxMatches, run, resolveRg)
+      if (result !== undefined) return result
+    }
+  }
 
   const matches: string[] = []
   let visited = 0

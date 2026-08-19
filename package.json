@@ -79,6 +79,7 @@
     "prepare": "tsdown",
     "test": "vitest run",
     "test:mount": "bash scripts/e2e-mount.sh",
+    "test:mount:fs-search": "bash scripts/e2e-mount.sh --grep \"fs-search e2e:\"",
     "check:consumer-types": "bash scripts/check-consumer-types.sh"
   },
   "license": "MIT",
@@ -130,6 +131,7 @@
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.8",
     "@lezer/highlight": "^1.2.3",
+    "@vscode/ripgrep": "^1.18.0",
     "clsx": "^2.1.1",
     "mermaid": "^11.16.1",
     "node-pty": "^1.1.0",
