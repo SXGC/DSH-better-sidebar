@@ -139,6 +139,10 @@ test('official right-sidebar handle owns the clamped track and conversation geom
   await expect.poll(
     () => rightRegion.evaluate(element => element.getBoundingClientRect().width),
   ).toBeGreaterThan(initial.sidebarWidth + 20)
+  await expect.poll(async () => {
+    const geometry = await readGeometry()
+    return Math.abs((initial.handleX - geometry.handleX) - (initial.conversationRight - geometry.conversationRight))
+  }, { timeout: 30_000 }).toBeLessThanOrEqual(2)
   const wide = await readGeometry()
   expect(wide.sidebarWidth).toBeGreaterThanOrEqual(300)
   expect(wide.sidebarWidth).toBeLessThanOrEqual(520)
@@ -157,6 +161,10 @@ test('official right-sidebar handle owns the clamped track and conversation geom
   await expect.poll(
     () => rightRegion.evaluate(element => element.getBoundingClientRect().width),
   ).toBeLessThan(wide.sidebarWidth - 20)
+  await expect.poll(async () => {
+    const geometry = await readGeometry()
+    return Math.abs((geometry.handleX - wide.handleX) - (geometry.conversationRight - wide.conversationRight))
+  }, { timeout: 30_000 }).toBeLessThanOrEqual(2)
   const narrow = await readGeometry()
   expect(narrow.sidebarWidth).toBeGreaterThanOrEqual(300)
   expect(narrow.sidebarWidth).toBeLessThanOrEqual(520)
