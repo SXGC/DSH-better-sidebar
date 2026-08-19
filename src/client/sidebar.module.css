@@ -34,14 +34,12 @@
    switching skins in the dsh-web-ui skin center re-skins the sidebar panels
    automatically (see AGENTS.md §8). */
 
-/* The persistent expand/collapse cluster at the top-right corner: two rail
-   controls side by side (bottom panel's glyph LEFT of the right panel's).
-   Always pinned to the viewport corner — inside the right panel's top-right
-   while it is open, sitting flush in the 34px tab strip (28px buttons at
-   top: 3) whose right end it really squeezes. z-index 45: above the panels
-   (40) but below the app's overlay stack (menus/tooltips/modals sit at
-   100+), so a cordis approval popup is never hidden behind the workbench
-   (issue #52). */
+/* The persistent expand/collapse cluster: two rail controls side by side
+   (bottom panel's glyph LEFT of the right panel's). ToggleCluster supplies
+   the live inline `right` offset: 10px while closed, or the official owner's
+   width + 10px on an open desktop track. Keeping the controls just outside
+   the fourth track makes them reachable without trying to out-stack the
+   AppFrame column from inside shell.overlay's stacking context. */
 .toggleCluster {
   position: fixed;
   top: 3px;
@@ -51,13 +49,6 @@
   flex-direction: row;
   gap: 4px;
   pointer-events: auto;
-}
-
-/* The tab strip of the OPEN right panel reserves the cluster's width at its
-   right end, so the tabs and the + menu genuinely yield space to the cluster
-   (never hiding under it). */
-.panel:not(.panelHidden) .tabBar {
-  padding-right: 72px;
 }
 
 /* The closed-state affordance is the native rail icon control: a plain
@@ -2188,14 +2179,6 @@
    switches (which panels render, the migration) are JS-driven via
    useNarrowViewport; this block only adapts the pure style details. */
 @media (max-width: 767px) {
-  /* The toggle cluster holds a single button on narrow viewports (the
-     bottom panel button is not rendered), so the open panel's tab strip
-     reserves 40px instead of the desktop 72px — the tabs and + menu still
-     yield space to the one remaining control. */
-  .panel:not(.panelHidden) .tabBar {
-    padding-right: 40px;
-  }
-
   /* Narrower tabs: a phone-width drawer fits more open tabs before the
      strip scrolls. */
   .tab {

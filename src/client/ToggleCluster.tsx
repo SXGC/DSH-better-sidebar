@@ -36,7 +36,11 @@ export function ToggleCluster(props: ToggleClusterProps) {
   )
 
   return (
-    <div className={css.toggleCluster} data-dsh-better-sidebar-toggles="">
+    <div
+      className={css.toggleCluster}
+      data-dsh-better-sidebar-toggles=""
+      style={{ right: layout.mode === 'desktop' && !owner.collapsed ? owner.width + 10 : 10 }}
+    >
       {layout.mode === 'desktop' && !owner.collapsed && (
         <Tooltip label={sidebar.state?.bottomOpen ? t('collapseBottomPanel') : t('expandBottomPanel')} side="bottom" delayMs={500}>
           <button
