@@ -558,7 +558,7 @@ export function Sidebar(props: { ctx: Context; store: SidebarStore; collapsed: b
   }, [ctx, sessionId, cwd])
 
   if (state === undefined || sessionId === undefined) {
-    return null
+    return <div className={css.editorPlaceholder}>{t('noSession')}</div>
   }
 
   const onNewTab = (optionId: string): void => {

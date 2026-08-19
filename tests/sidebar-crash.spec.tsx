@@ -44,7 +44,7 @@ interface MountedSidebar {
 }
 
 /** Mount the real Sidebar shell against a minimal context (real store + service). */
-function mountSidebar(): MountedSidebar {
+function mountSidebar({ current }: { current: string | undefined } = { current: 's1' }): MountedSidebar {
   vi.stubGlobal('WebSocket', FakeWebSocket)
   const container = document.createElement('div')
   document.body.append(container)
@@ -52,12 +52,12 @@ function mountSidebar(): MountedSidebar {
   const service = createBetterSidebarService(store)
   // Fresh-session seed: open the panel explicitly (openByDefault defaults off).
   store.setPrefs({ ...store.getPrefs(), openByDefault: true })
-  store.setSession('s1')
+  store.setSession(current)
   // useSyncExternalStore requires STABLE snapshots across calls (the real DSH
   // services return stable objects) — a fresh object per call loops forever.
   const localeSnapshot = { active: 'en' }
   const sessionsSnapshot = {
-    current: 's1',
+    current,
     // cwd present → api.sessionCwd is never called in these tests.
     byId: { s1: { cwd: '/tmp' } },
   }
@@ -85,6 +85,12 @@ afterEach(() => {
 })
 
 describe('official-layout isolation', () => {
+  it('shows guidance when no conversation is active', () => {
+    const { container, unmount } = mountSidebar({ current: undefined })
+    expect(container.textContent).toContain(t('noSession'))
+    unmount()
+  })
+
   it('does not write legacy --dsh-sidebar-width/--dsh-sidebar-height geometry', () => {
     const { unmount } = mountSidebar()
     const htmlStyle = document.documentElement.style
