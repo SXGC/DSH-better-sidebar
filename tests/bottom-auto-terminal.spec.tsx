@@ -67,7 +67,7 @@ function mountSidebar(): MountedSidebar {
     betterSidebar: service,
   }
   const root: Root = createRoot(container)
-  act(() => { root.render(createElement(Sidebar, { ctx: ctx as never, store })) })
+  act(() => { root.render(createElement(Sidebar, { ctx: ctx as never, store, collapsed: false, width: 360 })) })
   return {
     container,
     store,
@@ -121,13 +121,10 @@ describe('bottom-panel first-expand auto terminal (issue #42 trigger chain)', ()
     // The tab actually mounted and rendered — the chain is live end to end.
     expect(renders.count).toBeGreaterThanOrEqual(1)
     expect(container.textContent).toContain('terminal-stub-content')
-    // The panel itself survived (the #42 symptom was a WHOLE blank panel):
-    // the close control is present and the layout push for the bottom panel
-    // height is live.
+    // The panel itself survived (the #42 symptom was a WHOLE blank panel),
+    // while AppFrame geometry remains solely layout-owned.
     expect(container.querySelector(`[aria-label="${t('collapseBottomPanel')}"]`)).not.toBeNull()
-    expect(document.documentElement.style.getPropertyValue('--dsh-sidebar-height')).toBe(
-      `${state.bottomHeight}px`,
-    )
+    expect(document.documentElement.style.getPropertyValue('--dsh-sidebar-height')).toBe('')
   })
 
   it('never repeats the auto-open on later expansions (once per session)', () => {

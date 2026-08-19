@@ -1,12 +1,8 @@
 /**
  * Sidebar crash tests — the two failure modes behind issue #31.
  *
- * 1. Layout-push leak: the layout-push effect writes
- *    `--dsh-sidebar-width/--dsh-sidebar-height` on document.documentElement.
- *    Unmounting the Sidebar for ANY reason (error-boundary swap, plugin
- *    disable, HMR) must clear them — otherwise layout.css keeps squeezing
- *    `#root` with a stale margin and "the sidebar cannot be hidden" until a
- *    full page reload.
+ * 1. Official-layout isolation: the workbench never writes the legacy
+ *    `--dsh-sidebar-width/--dsh-sidebar-height` geometry variables.
  *
  * 2. Tab crash containment: a render error inside ONE tab's content must not
  *    take down the whole sidebar. The per-tab boundary shows a strip inside
@@ -70,7 +66,7 @@ function mountSidebar(): MountedSidebar {
     betterSidebar: service,
   }
   const root: Root = createRoot(container)
-  act(() => { root.render(createElement(Sidebar, { ctx: ctx as never, store })) })
+  act(() => { root.render(createElement(Sidebar, { ctx: ctx as never, store, collapsed: false, width: 360 })) })
   return {
     container,
     store,
@@ -87,15 +83,12 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('layout-push variable cleanup', () => {
-  it('clears --dsh-sidebar-width/--dsh-sidebar-height when the sidebar unmounts', () => {
-    const { store, unmount } = mountSidebar()
+describe('official-layout isolation', () => {
+  it('does not write legacy --dsh-sidebar-width/--dsh-sidebar-height geometry', () => {
+    const { unmount } = mountSidebar()
     const htmlStyle = document.documentElement.style
-    // The seeded session is open: the layout push is applied on mount.
-    const width = store.getSnapshot().state!.width
-    expect(htmlStyle.getPropertyValue('--dsh-sidebar-width')).toBe(`${width}px`)
-    expect(htmlStyle.getPropertyValue('--dsh-sidebar-height')).toBe('0px')
-    // Any unmount (boundary swap, plugin disable, HMR) must release the push.
+    expect(htmlStyle.getPropertyValue('--dsh-sidebar-width')).toBe('')
+    expect(htmlStyle.getPropertyValue('--dsh-sidebar-height')).toBe('')
     unmount()
     expect(htmlStyle.getPropertyValue('--dsh-sidebar-width')).toBe('')
     expect(htmlStyle.getPropertyValue('--dsh-sidebar-height')).toBe('')
@@ -104,7 +97,7 @@ describe('layout-push variable cleanup', () => {
 
 describe('tab crash containment', () => {
   it('a crashing tab shows an in-pane strip while the cluster and panel survive', () => {
-    const { container, service, store } = mountSidebar()
+    const { container, service } = mountSidebar()
     service.registerTab({
       id: 'crash',
       title: 'Crash',
@@ -115,11 +108,9 @@ describe('tab crash containment', () => {
     expect(container.textContent).toContain('boom')
     expect(container.textContent).toContain(t('terminalRetry'))
     // The toggle cluster and the panel itself survived (no full-tree swap):
-    // the collapse button is still there and the layout push is still live.
+    // the collapse button is still there and no legacy layout push leaked.
     expect(container.querySelector(`[aria-label="${t('collapse')}"]`)).not.toBeNull()
-    expect(document.documentElement.style.getPropertyValue('--dsh-sidebar-width')).toBe(
-      `${store.getSnapshot().state!.width}px`,
-    )
+    expect(document.documentElement.style.getPropertyValue('--dsh-sidebar-width')).toBe('')
   })
 
   it('the retry button recovers a tab whose crash has since been fixed', () => {
