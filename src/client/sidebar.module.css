@@ -50,6 +50,7 @@
   display: flex;
   flex-direction: row;
   gap: 4px;
+  pointer-events: auto;
 }
 
 /* The tab strip of the OPEN right panel reserves the cluster's width at its
@@ -122,11 +123,6 @@
     transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),
     width var(--ds-transition-duration-slow) var(--ds-ease-in-out),
     visibility 0s linear var(--ds-transition-duration-slow);
-}
-
-/* Width drags write at pointer cadence; easing would detach the edge. */
-.panel[data-dragging] {
-  transition: none;
 }
 
 .panelBody {

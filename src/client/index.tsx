@@ -15,7 +15,8 @@ import { createBetterSidebarService, matchUrlTarget } from './service.ts'
 import { resetChunks } from './chunk-loader.ts'
 import { registerBuiltins } from './builtins/index.ts'
 import { Sidebar } from './Sidebar.tsx'
-import { Occupant, type RightSidebarOwnerProps } from './Occupant.tsx'
+import { createRightSidebarOwnerSource, Occupant, type RightSidebarOwnerProps } from './Occupant.tsx'
+import { ToggleCluster } from './ToggleCluster.tsx'
 import { RenderBoundary } from './RenderBoundary.tsx'
 import { registerOpenPathInterception, registerTurnTailInterception } from './intercept.tsx'
 import { registerLinkInterception } from './link-intercept.ts'
@@ -80,6 +81,7 @@ export function apply(ctx: Context): void {
   // registrations (the official createXXXStore() factory rule — no
   // module-level singleton).
   const sidebarStore = createSidebarStore()
+  const ownerSource = createRightSidebarOwnerSource()
   // The sidebar registry service: external plugins register tab types and
   // file previewers through `ctx.betterSidebar.registerTab/registerFileViewer`.
   // Published before the panel mounts so consumers injecting 'betterSidebar'
@@ -120,19 +122,20 @@ export function apply(ctx: Context): void {
     resetChunks()
     ctx.effect(() => {
       let disposed = false
-      let disposeOccupant: (() => void) | undefined
+      let disposeSlots: (() => void) | undefined
       const unmount = (): void => {
-        disposeOccupant?.()
-        disposeOccupant = undefined
+        disposeSlots?.()
+        disposeSlots = undefined
       }
       const mount = (): void => {
-        if (disposeOccupant !== undefined || disposed) return
+        if (disposeSlots !== undefined || disposed) return
         try {
-          disposeOccupant = ctx.slots.inject('right-sidebar', () => {
+          const offOccupant = ctx.slots.inject('right-sidebar', () => {
             try {
               return ctx.slots.register({
                 name: 'right-sidebar',
                 inject: () => ({
+                  publishOwner: ownerSource.publish,
                   renderWorkbench: (owner: RightSidebarOwnerProps) => createElement(
                     RenderBoundary,
                     { className: css.boundaryError },
@@ -145,8 +148,32 @@ export function apply(ctx: Context): void {
               return () => {}
             }
           })
+          try {
+            const offToggle = ctx.slots.inject('shell.overlay', () => {
+              try {
+                return ctx.slots.register({
+                  name: 'shell.overlay',
+                  id: 'better-sidebar.toggle',
+                  inject: () => ({
+                    store: sidebarStore,
+                    layoutSnapshot: ctx.layout.snapshot,
+                    ownerSnapshot: ownerSource,
+                    localeSnapshot: ctx.locale,
+                    toggleRightSidebar: () => { ctx.layout.toggleRightSidebar() },
+                  }),
+                }, ToggleCluster)
+              } catch (error) {
+                fail('shell.overlay toggle', error)
+                return () => {}
+              }
+            })
+            disposeSlots = () => { offToggle(); offOccupant() }
+          } catch (error) {
+            offOccupant()
+            throw error
+          }
         } catch (error) {
-          fail('right-sidebar occupant', error)
+          fail('right-sidebar slots', error)
         }
       }
       const sync = async (): Promise<void> => {

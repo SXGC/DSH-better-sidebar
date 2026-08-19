@@ -6,8 +6,9 @@
  *
  * 2. Tab crash containment: a render error inside ONE tab's content must not
  *    take down the whole sidebar. The per-tab boundary shows a strip inside
- *    that tab's pane while the toggle cluster, the other tabs, and the panel
- *    itself stay alive; the retry button recovers a transient crash.
+ *    that tab's pane while the other tabs and workbench panel stay alive;
+ *    the retry button recovers a transient crash. The overlay toggle is a
+ *    separate slot contribution covered by occupant.spec.tsx.
  *
  * Rendered with the REAL Sidebar shell + real store/service against a minimal
  * fake context (createRoot + act(), the repo's jsdom pattern).
@@ -96,7 +97,7 @@ describe('official-layout isolation', () => {
 })
 
 describe('tab crash containment', () => {
-  it('a crashing tab shows an in-pane strip while the cluster and panel survive', () => {
+  it('a crashing tab shows an in-pane strip while the workbench panel survives', () => {
     const { container, service } = mountSidebar()
     service.registerTab({
       id: 'crash',
@@ -107,9 +108,9 @@ describe('tab crash containment', () => {
     // The strip lives inside the tab's pane — the crash is contained.
     expect(container.textContent).toContain('boom')
     expect(container.textContent).toContain(t('terminalRetry'))
-    // The toggle cluster and the panel itself survived (no full-tree swap):
-    // the collapse button is still there and no legacy layout push leaked.
-    expect(container.querySelector(`[aria-label="${t('collapse')}"]`)).not.toBeNull()
+    // The surrounding panel survived (no full-tree swap): its tab-strip
+    // action is still there and no legacy layout push leaked.
+    expect(container.querySelector(`[aria-label="${t('newTab')}"]`)).not.toBeNull()
     expect(document.documentElement.style.getPropertyValue('--dsh-sidebar-width')).toBe('')
   })
 
