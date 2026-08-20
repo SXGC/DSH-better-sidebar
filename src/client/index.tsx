@@ -12,7 +12,7 @@ import { createElement } from 'react'
 import type { Context } from '../context-types.ts'
 import { allLeaves, createSidebarStore, isAgentTabId } from './state.ts'
 import { createBetterSidebarService, matchUrlTarget } from './service.ts'
-import { resetChunks } from './chunk-loader.ts'
+import { revalidateChunksOnReactivate, setChunkModuleSystem } from './chunk-loader.ts'
 import { registerBuiltins } from './builtins/index.ts'
 import { Sidebar } from './Sidebar.tsx'
 import { createRightSidebarOwnerSource, Occupant, type RightSidebarOwnerProps } from './Occupant.tsx'
@@ -30,8 +30,10 @@ import css from './sidebar.module.css'
 import './layout.css'
 
 /** Services required before mounting (provided by the client runtime; the
- *  locale service backs the sidebar's copy — see locales.ts). */
-export const inject = ['slots', 'sessions', 'connection', 'workspaces', 'locale', 'layout']
+ *  locale service backs the sidebar's copy — see locales.ts). `layout`
+ *  owns the official right-sidebar track; `modules` (rc.8+) resolves lazy
+ *  chunk externals. */
+export const inject = ['slots', 'sessions', 'connection', 'workspaces', 'locale', 'layout', 'modules']
 
 /**
  * Error boundary over the sidebar tree (root scope): a render error in the
@@ -116,10 +118,16 @@ export function apply(ctx: Context): void {
     'dsh-better-sidebar: register built-in tabs and viewers',
   )
   try {
-    // Fresh chunk state for this activation: invalidate any chunk factories
-    // registered by a previous fiber (HMR) and drop the in-memory load cache
-    // so the next lazy open re-fetches the current chunk scripts.
-    resetChunks()
+    // rc.8+ exposes the client module system as the `ctx.modules` service
+    // (no window.__DSH_MODULES__ page global anymore); the chunk loader needs
+    // it to resolve its externals, so inject it before anything can load a
+    // lazy chunk. The loader falls back to the rc.7 global when absent.
+    setChunkModuleSystem(ctx.modules)
+    // Fresh chunk state for this activation: drop per-test fixtures and
+    // revalidate loaded chunk scripts against the bundle route's ETags —
+    // unchanged chunks keep their resolved exports (no re-inject /
+    // re-execute on HMR), changed ones are dropped for a clean re-fetch.
+    void revalidateChunksOnReactivate()
     ctx.effect(() => {
       let disposed = false
       let disposeSlots: (() => void) | undefined

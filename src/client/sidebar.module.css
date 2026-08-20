@@ -42,7 +42,8 @@
    AppFrame column from inside shell.overlay's stacking context. */
 .toggleCluster {
   position: fixed;
-  top: 3px;
+  /* env() resolves to 0 on devices without a top inset (desktops). */
+  top: calc(3px + env(safe-area-inset-top));
   right: 10px;
   z-index: 45;
   display: flex;
@@ -99,6 +100,9 @@
      with labels (#60/#105/#106). */
   background: var(--dsw-alias-bg-layer-1);
   border-left: 1px solid var(--dsw-alias-border-l2);
+  /* Bottom safe-area (notched phones): the drawer's bottom content clears
+     the home indicator; 0 on desktops. */
+  padding-bottom: env(safe-area-inset-bottom);
   /* Expand/collapse slides the panel; fullscreen animates the width. */
   transition:
     transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),
@@ -140,6 +144,8 @@
   flex-direction: column;
   background: var(--dsw-alias-bg-layer-1);
   border-top: 1px solid var(--dsw-alias-border-l2);
+  /* Bottom safe-area (notched phones); 0 on desktops. */
+  padding-bottom: env(safe-area-inset-bottom);
   /* Expand/collapse slides the panel; height drags animate the height. */
   transition:
     transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),
@@ -160,6 +166,13 @@
 /* Height drags write at pointer cadence; easing would detach the edge. */
 .bottomPanel[data-dragging] {
   transition: none;
+}
+
+/* Panel-internal reflows (tabs, editors, terminals) stay isolated from the
+   app shell. */
+.panel,
+.bottomPanel {
+  contain: layout style;
 }
 
 /* The bottom panel's height drag: the top edge strip (mirror of the right

@@ -104,7 +104,9 @@ test('fs-search e2e: searches the mounted workspace from the Files window', asyn
   await expect(sidebar).toBeAttached({ timeout: 90_000 })
   await dismissOnboarding(page)
 
-  const expandButton = sidebar.getByRole('button', { name: 'Expand sidebar' })
+  const expandButton = page
+    .locator('[data-shell-overlay] [data-dsh-better-sidebar-toggles]')
+    .getByRole('button', { name: 'Expand sidebar' })
   await expect(expandButton).toHaveCount(1, { timeout: 90_000 })
   await expandButton.click()
 
