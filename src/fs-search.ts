@@ -29,6 +29,9 @@ export type RunCommand = (
   opts: { cwd?: string; timeoutMs: number },
 ) => Promise<{ code: number; stdout: string; stderr: string }>
 
+/** Search implementation that produced the current result. */
+export type FsSearchEngine = 'fd' | 'fdfind' | 'packaged-rg' | 'path-rg' | 'js'
+
 /** Search budgets and native-engine seams. */
 export interface FsSearchOptions {
   /** Row cap of the result list (default 200). */
@@ -41,6 +44,8 @@ export interface FsSearchOptions {
   runCommand?: RunCommand
   /** Test seam replacing lazy resolution of the packaged ripgrep binary. */
   resolvePackagedRg?: () => Promise<string | null>
+  /** Diagnostic sink called when the effective engine changes. */
+  onEngineSelected?: (engine: FsSearchEngine) => void
 }
 
 const DEFAULT_MAX_MATCHES = 200
@@ -59,6 +64,7 @@ interface DetectionState {
   promise?: Promise<DetectedEngine>
   selected?: DetectedEngine
   unavailable: Set<string>
+  reportedEngine?: FsSearchEngine
 }
 
 interface NativeSearchAttempt {
@@ -129,6 +135,17 @@ function getDetectionState(run: RunCommand, resolveRg: ResolvePackagedRg): Detec
     byResolver.set(resolveRg, state)
   }
   return state
+}
+
+/** Report only effective engine transitions, not every debounced query. */
+function reportEngine(
+  state: DetectionState,
+  engine: FsSearchEngine,
+  onEngineSelected: FsSearchOptions['onEngineSelected'],
+): void {
+  if (onEngineSelected === undefined || state.reportedEngine === engine) return
+  state.reportedEngine = engine
+  onEngineSelected(engine)
 }
 
 /** Cache both successful and exhausted discovery; concurrent callers share the promise. */
@@ -286,13 +303,17 @@ async function searchRgChain(
   run: RunCommand,
   resolveRg: ResolvePackagedRg,
   skipPackaged = false,
+  onEngineSelected?: FsSearchOptions['onEngineSelected'],
 ): Promise<FsSearchResult | undefined> {
   const state = getDetectionState(run, resolveRg)
   if (!skipPackaged) {
     const rgPath = await resolvePackagedRgCached(resolveRg)
     if (rgPath !== null && !state.unavailable.has(rgPath)) {
       const attempt = await searchWithRg(rgPath, root, needle, maxMatches, run)
-      if (attempt.result !== undefined) return attempt.result
+      if (attempt.result !== undefined) {
+        reportEngine(state, 'packaged-rg', onEngineSelected)
+        return attempt.result
+      }
       if (attempt.missing) state.unavailable.add(rgPath)
     }
   }
@@ -306,6 +327,7 @@ async function searchRgChain(
   }
   const attempt = await searchWithRg('rg', root, needle, maxMatches, run)
   if (attempt.missing) state.unavailable.add('rg')
+  if (attempt.result !== undefined) reportEngine(state, 'path-rg', onEngineSelected)
   return attempt.result
 }
 
@@ -324,10 +346,11 @@ export async function searchFiles(root: string, query: string, opts: FsSearchOpt
   if (needle === '') return { matches: [], truncated: false }
   const maxMatches = opts.maxMatches ?? DEFAULT_MAX_MATCHES
   const maxVisited = opts.maxVisited ?? DEFAULT_MAX_VISITED
+  const run = opts.runCommand ?? runCommand
+  const resolveRg = opts.resolvePackagedRg ?? resolvePackagedRg
+  const state = getDetectionState(run, resolveRg)
 
   if (opts.engine !== 'js') {
-    const run = opts.runCommand ?? runCommand
-    const resolveRg = opts.resolvePackagedRg ?? resolvePackagedRg
     if (opts.engine === undefined || opts.engine === 'auto') {
       while (true) {
         const detected = await detectEngineCached(run, resolveRg)
@@ -335,16 +358,25 @@ export async function searchFiles(root: string, query: string, opts: FsSearchOpt
         const attempt = detected.kind === 'fd'
           ? await searchWithFd(detected.command, root, query.trim(), maxMatches, run)
           : await searchWithRg(detected.command, root, needle, maxMatches, run)
-        if (attempt.result !== undefined) return attempt.result
+        if (attempt.result !== undefined) {
+          reportEngine(
+            state,
+            detected.kind === 'fd'
+              ? detected.command
+              : detected.command === 'rg' ? 'path-rg' : 'packaged-rg',
+            opts.onEngineSelected,
+          )
+          return attempt.result
+        }
         if (attempt.missing) {
           invalidateCommand(run, resolveRg, detected.command)
           continue
         }
         if (detected.kind === 'fd') {
-          const fallback = await searchRgChain(root, needle, maxMatches, run, resolveRg)
+          const fallback = await searchRgChain(root, needle, maxMatches, run, resolveRg, false, opts.onEngineSelected)
           if (fallback !== undefined) return fallback
         } else if (detected.command !== 'rg') {
-          const fallback = await searchRgChain(root, needle, maxMatches, run, resolveRg, true)
+          const fallback = await searchRgChain(root, needle, maxMatches, run, resolveRg, true, opts.onEngineSelected)
           if (fallback !== undefined) return fallback
         }
         break
@@ -352,14 +384,18 @@ export async function searchFiles(root: string, query: string, opts: FsSearchOpt
     } else {
       if (opts.engine === 'fd') {
         const attempt = await searchWithFd('fd', root, query.trim(), maxMatches, run)
-        if (attempt.result !== undefined) return attempt.result
+        if (attempt.result !== undefined) {
+          reportEngine(state, 'fd', opts.onEngineSelected)
+          return attempt.result
+        }
         if (attempt.missing) invalidateCommand(run, resolveRg, 'fd')
       }
-      const result = await searchRgChain(root, needle, maxMatches, run, resolveRg)
+      const result = await searchRgChain(root, needle, maxMatches, run, resolveRg, false, opts.onEngineSelected)
       if (result !== undefined) return result
     }
   }
 
+  reportEngine(state, 'js', opts.onEngineSelected)
   const matches: string[] = []
   let visited = 0
   let truncated = false

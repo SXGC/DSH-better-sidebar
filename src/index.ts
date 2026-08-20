@@ -229,7 +229,9 @@ function buildApi(
       // must never escape the workspace), budgeted inside searchFiles.
       const { cwd } = cwdOf(payload)
       const query = requireString(payload, 'query')
-      return searchFiles(cwd, query)
+      return searchFiles(cwd, query, {
+        onEngineSelected: engine => ctx.logger?.debug(`[dsh-better-sidebar] fs-search engine: ${engine}`),
+      })
     },
     'fs.read': async (payload) => {
       const { cwd } = cwdOf(payload)

@@ -158,6 +158,35 @@ describe('fs-search', () => {
     expect(resolvePackagedRg).not.toHaveBeenCalled()
   })
 
+  it('reports only effective engine changes to the debug hook', async () => {
+    const dir = makeFixture()
+    let packagedSearches = 0
+    const runCommand = vi.fn(async (command: string, args: readonly string[]) => {
+      if (command === 'fd' || command === 'fdfind' || command === 'rg') {
+        return { code: 127, stdout: '', stderr: 'not found' }
+      }
+      packagedSearches += 1
+      return packagedSearches === 1
+        ? { code: 0, stdout: 'src/util.ts\0', stderr: '' }
+        : { code: 2, stdout: '', stderr: 'search failed' }
+    })
+    const onEngineSelected = vi.fn()
+    try {
+      const options = {
+        onEngineSelected,
+        resolvePackagedRg: async () => '/fake/packaged-rg',
+        runCommand,
+      }
+      await searchFiles(dir, 'util', options)
+      await searchFiles(dir, 'util', options)
+      await searchFiles(dir, 'util', options)
+
+      expect(onEngineSelected.mock.calls.map(([engine]) => engine)).toEqual(['packaged-rg', 'js'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('invalidates an fd command rejected with ENOENT and reselects the next tier', async () => {
     const missing = Object.assign(new Error('fd disappeared'), { code: 'ENOENT' })
     const runCommand = vi.fn(async (command: string, args: readonly string[]) => {
