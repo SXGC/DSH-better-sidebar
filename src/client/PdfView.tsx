@@ -56,7 +56,7 @@ export function PdfView(props: { scope: SessionScope; path: string; title: strin
     const blockForResize = (event: PointerEvent): void => {
       const target = event.target
       if (target instanceof Element
-        && target.closest(`.${css.panelResize}, .${css.divider}`) !== null) {
+        && target.closest(`.${css.divider}`) !== null) {
         block()
       }
     }

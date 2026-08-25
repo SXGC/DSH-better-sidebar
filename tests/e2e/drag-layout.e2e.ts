@@ -1,29 +1,22 @@
 /**
- * Official-layout drag lane. The plugin contributes content to the declared
- * `right-sidebar` track; AppFrame alone owns the resize handle and the
- * width clamp. A real pointer drag proves that the conversation
- * track follows that handle while the plugin leaves `#root` geometry alone.
- *
- * The server is booted by scripts/e2e-mount.sh; this spec only loads the page
- * and uses a separate workspace so it never races the mount lane's seed.
+ * Official-layout lane. DSH owns the right-sidebar track, resize handle and
+ * outer geometry; better-sidebar contributes docked content plus a sibling
+ * shell.overlay surface for toggles and free windows.
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test, expect, request, type APIRequestContext } from '@playwright/test'
+import { test, expect, request, type APIRequestContext, type Page } from '@playwright/test'
 
 const BASE_URL = process.env.DSH_E2E_URL
 if (!BASE_URL) {
   throw new Error('DSH_E2E_URL is not set — boot a DSH web instance with the plugin mounted and point this lane at it (see scripts/e2e-mount.sh)')
 }
 
-/** This lane's own workspace (distinct from mount.e2e.ts's, lanes run serially
- *  but against the same server — never share seed paths). */
 const WORKSPACE_PATH = process.env.DSH_E2E_DRAG_WORKSPACE ?? join(tmpdir(), 'dsh-e2e-drag-workspace')
 
 let api: APIRequestContext
 
-/** Seed one workspace + one session through the host's unary RPC surface. */
 async function seedSession(): Promise<void> {
   mkdirSync(WORKSPACE_PATH, { recursive: true })
   writeFileSync(join(WORKSPACE_PATH, 'seed.txt'), 'drag lane\n')
@@ -36,11 +29,35 @@ async function seedSession(): Promise<void> {
   }
   expect(workspaceBody.result.ok).toBe(true)
   const workspaceId = (workspaceBody.result as { value: { workspace: { workspaceId: string } } }).value.workspace.workspaceId
-
   const session = await api.post(`${BASE_URL}/api/session.create`, {
     data: { type: 'client-request', rpcId: 'e2e-drag-session', method: 'session.create', payload: { workspaceId } },
   })
   expect(session.ok(), `session.create: ${session.status()} ${await session.text()}`).toBe(true)
+}
+
+async function dismissTakeovers(page: Page): Promise<void> {
+  try {
+    await expect
+      .poll(() => page.getByRole('button', { name: /^(Continue|Configure later)$/ }).count(), { timeout: 60_000 })
+      .toBeGreaterThan(0)
+  } catch {
+    return
+  }
+  for (let round = 0; round < 8; round++) {
+    let dismissed = false
+    for (const name of ['Continue', 'Configure later']) {
+      const button = page.getByRole('button', { name, exact: true }).first()
+      if ((await button.count()) === 0) continue
+      try {
+        await button.click({ timeout: 4_000 })
+        dismissed = true
+        await page.waitForTimeout(1_000)
+      } catch {
+        // A higher takeover can mask this one; retry the stack next round.
+      }
+    }
+    if (!dismissed) break
+  }
 }
 
 test.beforeAll(async () => {
@@ -64,40 +81,14 @@ test('official right-sidebar handle owns the clamped track and conversation geom
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
   await expect(page.locator('#root > *')).not.toHaveCount(0, { timeout: 90_000 })
   const sidebar = page.locator('[data-layout-region="right-sidebar"] [data-dsh-better-sidebar]')
+  const overlay = page.locator('[data-shell-overlay] [data-dsh-better-sidebar-overlay]')
   await expect(sidebar).toBeAttached({ timeout: 90_000 })
+  await expect(overlay).toHaveCount(1)
+  await dismissTakeovers(page)
 
-  // Dismiss whatever onboarding takeover is present (same dance as the mount
-  // lane), so the pointer can reach the strip without a masking overlay.
-  try {
-    await expect
-      .poll(() => page.getByRole('button', { name: /^(Continue|Configure later)$/ }).count(), { timeout: 60_000 })
-      .toBeGreaterThan(0)
-  } catch {
-    console.warn('[e2e-drag] no onboarding takeover appeared; proceeding')
-  }
-  for (let round = 0; round < 8; round++) {
-    let dismissed = false
-    for (const name of ['Continue', 'Configure later']) {
-      const button = page.getByRole('button', { name, exact: true }).first()
-      if ((await button.count()) === 0) continue
-      try {
-        await button.click({ timeout: 4_000 })
-        dismissed = true
-        await page.waitForTimeout(1_000)
-      } catch {
-        // Masked by a takeover stacked above; retry in the next round.
-      }
-    }
-    if (!dismissed) break
-  }
-
-  // openByDefault defaults OFF. The shell-overlay contribution remains
-  // reachable while the fourth track is zero.
-  const toggles = page.locator('[data-shell-overlay] [data-dsh-better-sidebar-toggles]')
-  const expandButton = toggles.getByRole('button', { name: 'Expand sidebar' })
+  const expandButton = overlay.getByRole('button', { name: 'Expand sidebar' })
   await expect(expandButton, 'shell.overlay must offer the collapsed right-sidebar toggle').toHaveCount(1)
   await expandButton.click()
-
   const handle = page.locator('[data-side="right-sidebar"]')
   const conversation = page.locator('[data-layout-region="conversation"]')
   const rightRegion = page.locator('[data-layout-region="right-sidebar"]')
@@ -125,8 +116,6 @@ test('official right-sidebar handle owns the clamped track and conversation geom
     () => rightRegion.evaluate(element => element.getBoundingClientRect().width),
     { timeout: 30_000 },
   ).toBeGreaterThan(0)
-  // The official grid and its handle animate independently while opening.
-  // Sample the baseline only after both have converged on the same seam.
   await expect.poll(async () => {
     const geometry = await readGeometry()
     return Math.abs(geometry.handleX - geometry.conversationRight)
@@ -135,8 +124,6 @@ test('official right-sidebar handle owns the clamped track and conversation geom
   expect(initial.sidebarWidth).toBeLessThan(initial.viewportWidth)
   expect(initial.rootMarginRight).toBe('0px')
 
-  // Drag the official handle left far enough to hit its maximum. AppFrame
-  // clamps the fourth track; the conversation edge and handle move together.
   const initialHandle = await handle.boundingBox()
   expect(initialHandle).not.toBeNull()
   const dragY = initialHandle!.y + Math.min(120, initialHandle!.height / 2)
@@ -157,8 +144,6 @@ test('official right-sidebar handle owns the clamped track and conversation geom
   expect(Math.abs((initial.handleX - wide.handleX) - (initial.conversationRight - wide.conversationRight))).toBeLessThanOrEqual(2)
   expect(wide.rootMarginRight).toBe('0px')
 
-  // Drag the same AppFrame handle right through the minimum. No plugin-local
-  // col-resize strip participates in this lane.
   const wideHandle = await handle.boundingBox()
   expect(wideHandle).not.toBeNull()
   const wideDragY = wideHandle!.y + Math.min(120, wideHandle!.height / 2)
@@ -179,4 +164,54 @@ test('official right-sidebar handle owns the clamped track and conversation geom
   expect(Math.abs((narrow.handleX - wide.handleX) - (narrow.conversationRight - wide.conversationRight))).toBeLessThanOrEqual(2)
   expect(narrow.rootMarginRight).toBe('0px')
   await expect(conversation).toBeVisible()
+})
+
+test('a free window survives official collapse and docking it reveals the right sidebar', async ({ page }) => {
+  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('#root > *')).not.toHaveCount(0, { timeout: 90_000 })
+  const sidebar = page.locator('[data-layout-region="right-sidebar"] [data-dsh-better-sidebar]')
+  const overlay = page.locator('[data-shell-overlay] [data-dsh-better-sidebar-overlay]')
+  await expect(sidebar).toBeAttached({ timeout: 90_000 })
+  await expect(overlay).toHaveCount(1)
+  await dismissTakeovers(page)
+
+  const expandButton = overlay.getByRole('button', { name: 'Expand sidebar' })
+  if ((await expandButton.count()) === 1) await expandButton.click()
+  await expect(page.locator('[data-side="right-sidebar"]')).toHaveCount(1)
+
+  const filesTab = sidebar.locator('[title="Files"][draggable="true"]').first()
+  await expect(filesTab).toHaveCount(1)
+  await filesTab.click({ button: 'right' })
+  const floatItem = page.getByRole('menuitem', { name: 'Move to Free Window' }).first()
+  await expect(floatItem).toHaveCount(1)
+  await floatItem.click()
+  const floatWindow = overlay.locator('[data-dsh-float-window]')
+  await expect(floatWindow, 'free windows belong to shell.overlay, outside the occupant').toBeVisible({ timeout: 10_000 })
+  await expect(sidebar.locator('[data-dsh-float-window]')).toHaveCount(0)
+  const before = await floatWindow.boundingBox()
+  expect(before).not.toBeNull()
+
+  const collapseButton = overlay.getByRole('button', { name: 'Collapse sidebar' })
+  await expect(collapseButton).toHaveCount(1)
+  await collapseButton.click()
+  await expect(page.locator('[data-side="right-sidebar"]')).toHaveCount(0)
+  await expect(floatWindow, 'collapsing the official track must not hide or unmount a free window').toBeVisible()
+
+  const header = floatWindow.locator('[class*="floatHeader"]')
+  const headerBox = await header.boundingBox()
+  expect(headerBox).not.toBeNull()
+  await page.mouse.move(headerBox!.x + headerBox!.width / 2, headerBox!.y + headerBox!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(headerBox!.x - 80, headerBox!.y + 60, { steps: 8 })
+  await page.mouse.up()
+  await expect.poll(async () => (await floatWindow.boundingBox())?.x ?? before!.x).not.toBe(before!.x)
+
+  await header.click({ button: 'right' })
+  const dockItem = page.getByRole('menuitem', { name: 'Dock Back to Sidebar' }).first()
+  await expect(dockItem).toHaveCount(1)
+  await dockItem.click()
+  await expect(floatWindow).toHaveCount(0)
+  await expect(page.locator('[data-side="right-sidebar"]'), 'docking is an explicit reveal intent').toHaveCount(1)
+  await expect(sidebar.locator('[title="Files"][draggable="true"]').first()).toBeVisible()
+  expect(await page.locator('#root').evaluate(element => getComputedStyle(element).marginRight)).toBe('0px')
 })

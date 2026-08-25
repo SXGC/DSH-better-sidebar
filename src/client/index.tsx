@@ -16,7 +16,7 @@ import { revalidateChunksOnReactivate, setChunkModuleSystem } from './chunk-load
 import { registerBuiltins } from './builtins/index.ts'
 import { Sidebar } from './Sidebar.tsx'
 import { createRightSidebarOwnerSource, Occupant, type RightSidebarOwnerProps } from './Occupant.tsx'
-import { ToggleCluster } from './ToggleCluster.tsx'
+import { OverlaySurface } from './OverlaySurface.tsx'
 import { RenderBoundary } from './RenderBoundary.tsx'
 import { registerOpenPathInterception, registerTurnTailInterception } from './intercept.tsx'
 import { registerLinkInterception } from './link-intercept.ts'
@@ -25,7 +25,10 @@ import { registerSettingsNavIcon } from './settings-nav-icon.ts'
 import { loadExternalDisable, loadPrefs } from './prefs.ts'
 import { SideCardSection } from './SideCardSection.tsx'
 import { api } from './api.ts'
-import { LOCALE_NS, attachLocale, t, zh, en } from './locales.ts'
+import { LOCALE_NS, attachLocale, attachBetterLocale, t, zh, en,
+  ja, de, fr, pt, ko, ar, hi, id, tr, vi, th, ru, it, nl, sv, pl,
+  zhHK, zhTW, zhMO,
+} from './locales.ts'
 import css from './sidebar.module.css'
 import './layout.css'
 
@@ -78,17 +81,136 @@ export function apply(ctx: Context): void {
     const offEn = ctx.locale.register(LOCALE_NS, 'en', en)
     return () => { offZh(); offEn() }
   }, 'dsh-better-sidebar: dictionaries')
+
+  // Opt-in third-language support through @huanlin/dsh-plugin-better-locale.
+  // When that plugin is installed, it publishes `ctx.betterLocale` (the
+  // override store) and patches LocaleRuntime.prototype.lookup to consult
+  // it. We mirror the same override awareness into the sidebar's own `t()`:
+  // attachBetterLocale() makes t() consult the store's getOverride first,
+  // so the sidebar's chrome (which bypasses ctx.locale and calls t()
+  // directly) also switches to the override language. We also register
+  // the ja dict with the better-locale store so external callers of
+  // ctx.locale.lookup('betterSidebar', key) get the override text too.
+  //
+  // Activation-order-safe: ctx.get('betterLocale') is a non-reactive read
+  // (cordis only re-evaluates declared `inject` deps). If better-locale
+  // activates after better-sidebar, the initial read returns undefined.
+  // We subscribe to the locale revision — better-locale bumps it on
+  // activation (when a persisted override exists) and on every override
+  // switch — and re-check ctx.get on each bump, attaching + registering
+  // the ja dict once the store becomes available.
+  ctx.effect(() => {
+    let dispose: (() => void) | undefined
+    const sync = (): void => {
+      dispose?.()
+      dispose = undefined
+      const store = ctx.get('betterLocale') as
+        | {
+            readonly active: string | undefined
+            getOverride(dshActive: string, ns: string, key: string): string | undefined
+            isOverrideActive(dshActive: string): boolean
+            register(ns: string, dicts: Record<string, Record<string, string>>): () => void
+            subscribe(listener: () => void): () => void
+          }
+        | undefined
+      attachBetterLocale(store)
+      if (store !== undefined) {
+        dispose = store.register(LOCALE_NS, {
+          ja, de, fr, pt, ko, ar, hi, id, tr, vi, th, ru, it, nl, sv, pl,
+          'zh-HK': zhHK, 'zh-TW': zhTW, 'zh-MO': zhMO,
+        })
+      }
+    }
+    // Initial check (picks up the store if better-locale activated first).
+    sync()
+    // Re-check on every locale revision bump (better-locale bumps when it
+    // activates with a persisted override, and when the user switches).
+    const unsubscribe = ctx.locale.subscribe(sync)
+    return () => {
+      unsubscribe()
+      dispose?.()
+      attachBetterLocale(undefined)
+    }
+  }, 'dsh-better-sidebar: better-locale lazy integration')
   // One store instance per activation: production code creates it only here,
   // then hands it to the mounted panel and closes over it in the slot
   // registrations (the official createXXXStore() factory rule — no
   // module-level singleton).
   const sidebarStore = createSidebarStore()
-  const ownerSource = createRightSidebarOwnerSource()
+  let surfacesActive = false
+  let observedSessionId: string | undefined
+  let pendingOwnerAck: { sessionId: string; collapsed: boolean } | undefined
+
+  const requestOwnerState = (collapsed: boolean): void => {
+    if (!surfacesActive) return
+    const sessionId = sidebarStore.getSnapshot().sessionId
+    if (sessionId === undefined) return
+    if (pendingOwnerAck?.sessionId === sessionId && pendingOwnerAck.collapsed === collapsed) return
+    pendingOwnerAck = { sessionId, collapsed }
+    if (collapsed) ctx.layout.closeRightSidebar()
+    else ctx.layout.openRightSidebar()
+  }
+
+  const revealDockedSurface = (): void => {
+    if (!surfacesActive) return
+    const snapshot = sidebarStore.getSnapshot()
+    if (snapshot.sessionId === undefined || snapshot.state === undefined) return
+    if (!snapshot.state.panelOpen) {
+      sidebarStore.reduce(state => ({ ...state, panelOpen: true }))
+    }
+    requestOwnerState(false)
+  }
+
+  const projectOwnerState = (owner: RightSidebarOwnerProps): void => {
+    const snapshot = sidebarStore.getSnapshot()
+    if (snapshot.sessionId === undefined || snapshot.state === undefined) return
+    sidebarStore.reduce((state) => {
+      const panelOpen = !owner.collapsed
+      const width = owner.width > 0 ? owner.width : state.width
+      if (state.panelOpen === panelOpen && state.width === width) return state
+      return { ...state, panelOpen, width }
+    })
+  }
+
+  const ownerSource = createRightSidebarOwnerSource((owner) => {
+    const snapshot = sidebarStore.getSnapshot()
+    if (snapshot.sessionId === undefined || snapshot.state === undefined) return
+    const pending = pendingOwnerAck
+    if (pending !== undefined && pending.sessionId === snapshot.sessionId) {
+      if (pending.collapsed !== owner.collapsed) return
+      pendingOwnerAck = undefined
+    }
+    projectOwnerState(owner)
+  })
+
+  const reconcileActiveSession = (force = false): void => {
+    if (!surfacesActive) return
+    const snapshot = sidebarStore.getSnapshot()
+    if (snapshot.sessionId === undefined || snapshot.state === undefined) return
+    const sessionChanged = observedSessionId !== snapshot.sessionId
+    observedSessionId = snapshot.sessionId
+    if (sessionChanged && pendingOwnerAck?.sessionId !== snapshot.sessionId) pendingOwnerAck = undefined
+    const owner = ownerSource.getSnapshot()
+    const desiredCollapsed = !snapshot.state.panelOpen
+    if (owner.collapsed === desiredCollapsed) {
+      // A session switch can land on the host's already-current geometry, in
+      // which case ctx.layout emits no new owner props. Project that geometry
+      // immediately instead of leaving an acknowledgement pending forever.
+      if (force || sessionChanged) projectOwnerState(owner)
+      return
+    }
+    requestOwnerState(desiredCollapsed)
+  }
+
+  ctx.effect(
+    () => sidebarStore.subscribe(() => { reconcileActiveSession() }),
+    'dsh-better-sidebar: official layout reconciliation',
+  )
   // The sidebar registry service: external plugins register tab types and
   // file previewers through `ctx.betterSidebar.registerTab/registerFileViewer`.
   // Published before the panel mounts so consumers injecting 'betterSidebar'
   // are ready by the time the sidebar renders.
-  const service = createBetterSidebarService(sidebarStore)
+  const service = createBetterSidebarService(sidebarStore, { revealDockedSurface })
   ctx.provide('betterSidebar', service)
   // Terminal tab titles use the host's effective shell name (e.g. bash/zsh)
   // instead of "Terminal 1". Start with a safe fallback and replace it as
@@ -130,8 +252,11 @@ export function apply(ctx: Context): void {
     void revalidateChunksOnReactivate()
     ctx.effect(() => {
       let disposed = false
+      let syncGeneration = 0
       let disposeSlots: (() => void) | undefined
       const unmount = (): void => {
+        surfacesActive = false
+        pendingOwnerAck = undefined
         disposeSlots?.()
         disposeSlots = undefined
       }
@@ -140,42 +265,53 @@ export function apply(ctx: Context): void {
         try {
           const offOccupant = ctx.slots.inject('right-sidebar', () => {
             try {
-              return ctx.slots.register({
+              const dispose = ctx.slots.register({
                 name: 'right-sidebar',
                 inject: () => ({
                   publishOwner: ownerSource.publish,
                   renderWorkbench: (owner: RightSidebarOwnerProps) => createElement(
                     RenderBoundary,
                     { className: css.boundaryError },
-                    createElement(Sidebar, { ctx, store: sidebarStore, ...owner }),
+                    createElement(Sidebar, {
+                      ctx,
+                      store: sidebarStore,
+                      collapsed: owner.collapsed,
+                      revealDockedSurface,
+                    }),
                   ),
                 }),
               }, Occupant)
+              queueMicrotask(() => { reconcileActiveSession(true) })
+              return dispose
             } catch (error) {
               fail('right-sidebar occupant', error)
               return () => {}
             }
           })
           try {
-            const offToggle = ctx.slots.inject('shell.overlay', () => {
+            const offOverlay = ctx.slots.inject('shell.overlay', () => {
               try {
                 return ctx.slots.register({
                   name: 'shell.overlay',
-                  id: 'better-sidebar.toggle',
+                  id: 'better-sidebar.overlay',
                   inject: () => ({
+                    ctx,
                     store: sidebarStore,
                     layoutSnapshot: ctx.layout.snapshot,
                     ownerSnapshot: ownerSource,
                     localeSnapshot: ctx.locale,
                     toggleRightSidebar: () => { ctx.layout.toggleRightSidebar() },
+                    revealDockedSurface,
                   }),
-                }, ToggleCluster)
+                }, OverlaySurface)
               } catch (error) {
-                fail('shell.overlay toggle', error)
+                fail('shell.overlay surface', error)
                 return () => {}
               }
             })
-            disposeSlots = () => { offToggle(); offOccupant() }
+            disposeSlots = () => { offOverlay(); offOccupant() }
+            surfacesActive = true
+            reconcileActiveSession(true)
           } catch (error) {
             offOccupant()
             throw error
@@ -185,6 +321,7 @@ export function apply(ctx: Context): void {
         }
       }
       const sync = async (): Promise<void> => {
+        const generation = ++syncGeneration
         if (disposed) return
         // Resolve the user's side card prefs BEFORE the first session seeds,
         // so a brand-new conversation opens (or stays closed) at the chosen
@@ -196,12 +333,12 @@ export function apply(ctx: Context): void {
           new Promise<null>(resolve => { const timer = window.setTimeout(() => resolve(null), 2000) }),
         ])
         if (prefs !== null) sidebarStore.setPrefs(prefs)
-        if (disposed) return
+        if (disposed || generation !== syncGeneration) return
         // Mutual exclusion with the dsh-web-ui family right panel: while the
         // aionui-panel provider is selected, the sidebar must not mount at
         // all. Re-evaluated on every settings-document update (live switch).
         const suspended = await loadExternalDisable(api)
-        if (disposed) return
+        if (disposed || generation !== syncGeneration) return
         sidebarStore.setSuspended(suspended)
         if (suspended) unmount()
         else mount()
@@ -215,6 +352,7 @@ export function apply(ctx: Context): void {
       const offRemote = remote?.$on?.('settings/document-updated', () => { void sync() })
       return () => {
         disposed = true
+        syncGeneration += 1
         offRemote?.()
         unmount()
       }
@@ -226,7 +364,7 @@ export function apply(ctx: Context): void {
           return registerTurnTailInterception(ctx, sidebarStore)
         } catch (error) {
           fail('interception', error)
-          return undefined
+          return () => {}
         }
       },
       'dsh-better-sidebar: turn-tail interception',
@@ -238,7 +376,7 @@ export function apply(ctx: Context): void {
           return registerOpenPathInterception(ctx, sidebarStore)
         } catch (error) {
           fail('interception', error)
-          return undefined
+          return () => {}
         }
       },
       'dsh-better-sidebar: open-path interception',
@@ -276,13 +414,13 @@ export function apply(ctx: Context): void {
               let title: string | undefined
               try { title = new URL(url).hostname } catch { /* keep the default title */ }
               const type = urlTargetOf(new URL(url)) ?? 'browser'
-              ctx.betterSidebar?.openTab({ type, url, title })
+              ctx.get('betterSidebar')?.openTab({ type, url, title })
             },
             selfOrigin: window.location.origin,
           })
         } catch (error) {
           fail('interception', error)
-          return undefined
+          return () => {}
         }
       },
       'dsh-better-sidebar: link interception',
@@ -302,7 +440,7 @@ export function apply(ctx: Context): void {
           return registerImeGuard()
         } catch (error) {
           fail('ime guard', error)
-          return undefined
+          return () => {}
         }
       },
       'dsh-better-sidebar: IME composition guard',

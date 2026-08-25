@@ -39,6 +39,7 @@ export function ToggleCluster(props: ToggleClusterProps) {
     <div
       className={css.toggleCluster}
       data-dsh-better-sidebar-toggles=""
+      data-dsh-toggle-cluster=""
       style={{ right: layout.mode === 'desktop' && !owner.collapsed ? owner.width + 10 : 10 }}
     >
       {layout.mode === 'desktop' && !owner.collapsed && (

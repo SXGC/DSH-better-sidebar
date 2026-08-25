@@ -55,6 +55,7 @@ if (g.window === undefined) {
     innerWidth: 1024,
     innerHeight: 768,
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    location: { origin: 'http://localhost', search: '' },
   }
 }
 
