@@ -171,21 +171,3 @@ export function jobStatusLabel(
     case 'failed': return t('jobStatusFailed')
   }
 }
-
-/**
- * Elapsed time in at most two adjacent units (mirror of the official
- * ui-jobs duration wording). A background job that outlives an hour is
- * already exceptional, so hours is the widest unit.
- */
-export function formatJobDuration(
-  elapsedMs: number,
-  t: (key: CopyKey, params?: Record<string, string | number>) => string,
-): string {
-  const total = Math.max(0, Math.floor(elapsedMs / 1_000))
-  const seconds = total % 60
-  const minutes = Math.floor(total / 60) % 60
-  const hours = Math.floor(total / 3_600)
-  if (hours > 0) return t('jobDurationHours', { hours, minutes })
-  if (minutes > 0) return t('jobDurationMinutes', { minutes, seconds })
-  return t('jobDurationSeconds', { seconds })
-}

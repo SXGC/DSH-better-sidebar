@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 import { SubagentView } from '../src/client/SubagentView.tsx'
 import { createSidebarStore } from '../src/client/state.ts'
+import { timelineTicks } from '../src/client/agent-timeline.ts'
 import type { AgentDetailResult, AgentTimelineResult } from '../src/agent-timeline-routes.ts'
 import type { Context, SidebarJobView, SidebarSessionList } from '../src/context-types.ts'
 
@@ -114,6 +115,18 @@ function baseSnapshot(): SidebarSessionList {
   }
 }
 
+/**
+ * The dashboard picks its layout from the PANEL width, not the window: the
+ * split tree + gantt canvas only appears once the panel can carry both.
+ * Gantt-specific tests must therefore widen the panel explicitly.
+ */
+function wideStore(width = 900) {
+  const store = createSidebarStore()
+  store.setSession('root')
+  store.update((draft) => { draft.width = width })
+  return store
+}
+
 let fetchQueue: AgentTimelineResult[]
 let detailQueue: AgentDetailResult[]
 let detailFailures: number
@@ -121,6 +134,7 @@ const fetchCalls: string[] = []
 const scrollIntoViewTargets: Element[] = []
 
 beforeEach(() => {
+  localStorage.clear()
   fetchQueue = [baseTimeline]
   const detail: AgentDetailResult = {
     sessionId: 'child',
@@ -178,6 +192,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  localStorage.clear()
   vi.unstubAllGlobals()
   vi.useRealTimers()
   for (const el of document.querySelectorAll('body > div')) el.remove()
@@ -200,8 +215,8 @@ describe('Run Dashboard view', () => {
     expect(container.querySelector('[role="treegrid"]')?.textContent).toContain('Root task')
     expect(container.querySelector('[role="treegrid"]')?.textContent).toContain('worker')
     expect(container.textContent).toContain('已卸载')
-    expect(container.textContent).toContain('active')
-    expect(container.textContent).toContain('wall')
+    expect(container.textContent).toContain('活跃时长')
+    expect(container.textContent).toContain('墙钟')
     expect(container.querySelectorAll('[data-segment-state="cold"]')).toHaveLength(1)
     unmount()
   })
@@ -259,8 +274,7 @@ describe('Run Dashboard view', () => {
 
   it('supports splitter keyboard resizing through persisted sidebar state', async () => {
     const list = makeList(baseSnapshot())
-    const store = createSidebarStore()
-    store.setSession('root')
+    const store = wideStore()
     const { container, unmount } = mount(
       createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
     )
@@ -280,8 +294,7 @@ describe('Run Dashboard view', () => {
 
   it('supports splitter pointer dragging through persisted sidebar state', async () => {
     const list = makeList(baseSnapshot())
-    const store = createSidebarStore()
-    store.setSession('root')
+    const store = wideStore()
     const { container, unmount } = mount(
       createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
     )
@@ -307,8 +320,7 @@ describe('Run Dashboard view', () => {
       { ...baseTimeline, asOfSeq: 12, root: { ...baseTimeline.root, lastEventAt: 20_000 } },
     ]
     const list = makeList(baseSnapshot())
-    const store = createSidebarStore()
-    store.setSession('root')
+    const store = wideStore()
     const { container, unmount } = mount(
       createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
     )
@@ -378,10 +390,10 @@ describe('Run Dashboard view', () => {
     )
     await act(async () => {})
 
-    expect(container.querySelector('[data-mobile-run-dashboard]')).not.toBeNull()
+    expect(container.querySelector('[data-run-dashboard-list]')).not.toBeNull()
     expect(container.querySelector('[data-timeline-scroller]')).toBeNull()
     expect(container.textContent).toContain('/root/child')
-    expect(container.textContent).toContain('active')
+    expect(container.textContent).toContain('活跃时长')
     expect(container.textContent).toContain('后台任务')
     expect(container.textContent).toContain('mobile job')
     await act(async () => {
@@ -500,8 +512,7 @@ describe('Run Dashboard view', () => {
       },
       jobsBySession,
     })
-    const store = createSidebarStore()
-    store.setSession('root')
+    const store = wideStore()
     const { container, unmount } = mount(
       createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
     )
@@ -920,6 +931,235 @@ describe('Run Dashboard view', () => {
     expect(container.textContent).toContain('代理已关闭')
     expect(container.textContent).not.toContain('restart')
     expect(container.textContent).not.toContain('重新运行')
+    unmount()
+  })
+  it('picks its layout from the panel width, not the window width, and follows a resize', async () => {
+    // The regression: a 360px sidebar inside a 900px window used to claim the
+    // desktop split, so the tree column ate the canvas and both were stubs.
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    store.update((draft) => { draft.width = 360 })
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+    await act(async () => {})
+
+    expect(window.innerWidth).toBe(900)
+    expect(container.querySelector('[data-run-dashboard-list]')).not.toBeNull()
+    expect(container.querySelector('[data-timeline-scroller]')).toBeNull()
+    expect(container.querySelector('[role="separator"]')).toBeNull()
+    // The viewport controls only exist next to a canvas they can move.
+    expect(container.querySelector('button[aria-label="放大"]')).toBeNull()
+    // Every row still carries its comparable span as a spark strip.
+    expect(container.querySelectorAll('[data-segment-state]').length).toBeGreaterThan(0)
+
+    await act(async () => { store.update((draft) => { draft.width = 900 }) })
+
+    expect(container.querySelector('[data-run-dashboard-list]')).toBeNull()
+    expect(container.querySelector('[data-timeline-scroller]')).not.toBeNull()
+    expect(container.querySelector('button[aria-label="放大"]')).not.toBeNull()
+
+    await act(async () => { store.update((draft) => { draft.width = 360 }) })
+    expect(container.querySelector('[data-run-dashboard-list]')).not.toBeNull()
+    unmount()
+  })
+
+  it('exposes tree depth on every row so nesting is not invisible', async () => {
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+    await act(async () => {})
+
+    const root = container.querySelector('[data-run-dashboard-row-id="root"]') as HTMLElement
+    const child = container.querySelector('[data-run-dashboard-row-id="child"]') as HTMLElement
+    expect(root.style.getPropertyValue('--run-depth')).toBe('0')
+    expect(child.style.getPropertyValue('--run-depth')).toBe('1')
+    expect(root.getAttribute('aria-level')).toBe('1')
+    expect(child.getAttribute('aria-level')).toBe('2')
+    unmount()
+  })
+
+  it('positions every axis stamp and gridline on its own tick ratio', async () => {
+    const list = makeList(baseSnapshot())
+    const store = wideStore()
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+    await act(async () => {})
+
+    const canvas = container.querySelector('[data-timeline-canvas]') as HTMLElement
+    const width = Number(canvas.dataset.timelineWidth)
+    const range = Number(canvas.dataset.timelineRangeMs)
+    const expected = timelineTicks({ start: 0, end: range }, width)
+    const stamps = [...canvas.querySelectorAll<HTMLElement>('[data-timeline-tick]')]
+    const gridlines = [...canvas.querySelectorAll<HTMLElement>('[data-timeline-gridline]')]
+
+    expect(stamps).toHaveLength(expected.length)
+    expect(gridlines).toHaveLength(expected.length)
+    // A stamp laid out by the flow would ignore `left` entirely, which is how
+    // the axis silently drifted away from the bars it labels.
+    for (const stamp of stamps) expect(stamp.style.left).toMatch(/%$/)
+    for (const line of gridlines) expect(line.style.left).toMatch(/%$/)
+    expect(stamps.map(stamp => stamp.style.left)).toEqual(gridlines.map(line => line.style.left))
+    unmount()
+  })
+
+  it('signals status by shape and word, not colour alone, on every row', async () => {
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+    await act(async () => {})
+
+    const marks = [...container.querySelectorAll<HTMLElement>('[data-run-dashboard-row-id] [data-shape]')]
+    const badges = marks.map(mark => mark.parentElement as HTMLElement)
+    expect(badges).toHaveLength(2)
+    for (const [index, badge] of badges.entries()) {
+      const kind = badge.dataset.state
+      expect(kind).toBeTruthy()
+      // Shape channel: survives greyscale and colour-blind rendering.
+      expect(marks[index]?.dataset.shape).toBe(kind)
+      // Word channel: the exact state, always spelled out.
+      expect(badge.textContent?.trim().length).toBeGreaterThan(0)
+    }
+    expect(badges.map(badge => badge.dataset.state)).toEqual(['running', 'cold'])
+    expect(badges[1]?.textContent).toContain('已卸载')
+    unmount()
+  })
+
+  it('marks open-ended spans and keeps the narrow spark strip wordless', async () => {
+    fetchQueue = [{
+      ...baseTimeline,
+      agents: baseTimeline.agents.map(agent => ({
+        ...agent,
+        state: { residency: 'live', turn: { kind: 'running' } },
+        statePoints: [
+          { seq: 3, time: 3_000, transition: 'turn-started', state: { residency: 'live', turn: { kind: 'running' } } },
+        ],
+      })),
+    }] as AgentTimelineResult[]
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, render, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+    await act(async () => {})
+
+    const sparkSegments = [...container.querySelectorAll<HTMLElement>('[data-segment-state]')]
+    expect(sparkSegments.length).toBeGreaterThan(0)
+    // A still-running span has no right edge to draw.
+    expect(sparkSegments.some(segment => segment.dataset.segmentOpen === 'true')).toBe(true)
+    // Words inside a 6px strip are the "table fragment" look: never there.
+    for (const segment of sparkSegments) expect(segment.textContent).toBe('')
+
+    await act(async () => { store.update((draft) => { draft.width = 900 }) })
+    render(createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }))
+    await act(async () => {})
+
+    const laneSegments = [...container.querySelectorAll<HTMLElement>('[data-run-dashboard-lane-id] [data-segment-state]')]
+    expect(laneSegments.length).toBeGreaterThan(0)
+    // The wide canvas has room, so a bar wide enough carries its state word.
+    expect(laneSegments.some(segment => segment.textContent !== '')).toBe(true)
+    unmount()
+  })
+
+  it('keeps the duration on the row and demotes the raw clock figures', async () => {
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+    await act(async () => {})
+
+    const child = container.querySelector('[data-run-dashboard-row-id="child"]') as HTMLElement
+    const durations = [...child.querySelectorAll<HTMLElement>('[title*="墙钟"]')]
+    // Exactly one element carries the full active/wall/segments summary as a
+    // tooltip; the row itself shows a single number.
+    expect(durations.length).toBeGreaterThan(0)
+    expect(durations[0]?.title).toContain('活跃')
+    expect(durations[0]?.title).toContain('段')
+    expect(durations[0]?.textContent).toContain('活跃时长')
+    expect(durations[0]?.textContent).toContain('4 秒')
+    // The clock span stays announced and hoverable, just not competing.
+    expect(child.textContent).toContain('墙钟')
+    unmount()
+  })
+
+  it('keeps the crowded filters mounted and labelled behind a disclosure', async () => {
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+    await act(async () => {})
+
+    const more = container.querySelector('details') as HTMLDetailsElement
+    expect(more).not.toBeNull()
+    expect(more.open).toBe(false)
+    expect(more.textContent).toContain('更多筛选')
+    // Text + status are the two that always fit a 360px row.
+    const search = container.querySelector('[aria-label="文本筛选"]') as HTMLInputElement
+    const state = container.querySelector('[aria-label="状态筛选"]') as HTMLSelectElement
+    expect(more.contains(search)).toBe(false)
+    expect(more.contains(state)).toBe(false)
+    // The rest stay in the DOM, addressable, and still filter while collapsed.
+    for (const label of ['模型筛选', '路径筛选', '仅长运行']) {
+      const field = container.querySelector(`[aria-label="${label}"]`) as HTMLElement
+      expect(field).not.toBeNull()
+      expect(more.contains(field)).toBe(true)
+    }
+    expect(container.textContent).not.toContain('项生效')
+
+    const path = container.querySelector('[aria-label="路径筛选"]') as HTMLInputElement
+    await act(async () => {
+      path.value = '/root/child'
+      path.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.querySelector('[data-run-dashboard-row-id="child"]')).not.toBeNull()
+    // Collapsed filters must announce that they are narrowing the tree.
+    expect(container.textContent).toContain('1 项生效')
+
+    await act(async () => {
+      search.value = 'worker'
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.textContent).toContain('2 项生效')
+    unmount()
+  })
+
+  it('gives each row a labelled action group with the destructive pair set apart', async () => {
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+    await act(async () => {})
+
+    const child = container.querySelector('[data-run-dashboard-row-id="child"]') as HTMLElement
+    const group = child.querySelector('[role="group"]') as HTMLElement
+    expect(group.getAttribute('aria-label')).toBe('worker 的操作')
+    // The name never shares its line with a control.
+    const header = child.firstElementChild as HTMLElement
+    expect(header.textContent).toContain('worker')
+    expect(header.querySelector('button')).toBeNull()
+    // All four controls remain reachable at any width.
+    for (const label of ['打开聊天 worker', '查看详情 worker', '中断 worker', '关闭 worker']) {
+      expect(container.querySelector(`button[aria-label="${label}"]`)).not.toBeNull()
+    }
+    const interrupt = container.querySelector('button[aria-label="中断 worker"]') as HTMLElement
+    const close = container.querySelector('button[aria-label="关闭 worker"]') as HTMLElement
+    expect(interrupt.parentElement).toBe(close.parentElement)
+    expect(interrupt.parentElement).not.toBe(group)
     unmount()
   })
 })

@@ -25,7 +25,6 @@ import {
 } from './subagent-detect.ts'
 import {
   collectTreeJobs,
-  formatJobDuration,
   isJobLive,
   orderJobs,
   resolveJobOwner,
@@ -37,10 +36,15 @@ import {
 import { api, type JobOutputResult } from './api.ts'
 import { IconStopOutline16 } from './icons.tsx'
 import {
+  agentDotState,
+  agentStateKind,
   buildTimelineDisplay,
+  countActiveFilters,
   filterTimelineDisplay,
   formatAgentState,
+  formatDuration,
   normalizeLongRunningMinutes,
+  timelineTicks,
   type TimelineDisplay,
   type TimelineDisplayFilters,
   type TimelineDisplayRow,
@@ -257,7 +261,7 @@ function JobsSection(props: {
             const secondary = [
               jobStatusLabel(job.status, t),
               ...(job.detail !== undefined && job.detail !== '' ? [job.detail] : []),
-              formatJobDuration(elapsed, t),
+              formatDuration(elapsed, t),
             ].filter(Boolean).join(' · ')
             return (
               <li
@@ -339,11 +343,19 @@ function JobsSection(props: {
   )
 }
 
-const RUN_DASHBOARD_MOBILE_WIDTH = 640
+/**
+ * Narrowest sidebar that still fits a readable tree column NEXT TO a shared
+ * gantt canvas. Below it the page falls back to the row list, whose per-row
+ * spark bar carries the same comparable spans — a 360px sidebar split into
+ * two columns leaves both a stub, which is worse than one good list.
+ */
+const RUN_DASHBOARD_GANTT_MIN_PANEL = 520
 const TIMELINE_BASE_WIDTH = 600
 const TIMELINE_PAN_STEP = 64
 const TIMELINE_ZOOM_FACTOR = 1.25
 const TREE_KEYBOARD_STEP = 16
+/** Narrowest gantt bar that can carry its state word without clipping it. */
+const SEGMENT_LABEL_MIN_PX = 54
 
 type TimelineLoadState =
   | { kind: 'idle' }
@@ -378,19 +390,51 @@ const STATE_FILTER_OPTIONS = [
   'closed',
 ] as const
 
-function isMobileDashboard(): boolean {
-  return typeof window !== 'undefined' && window.innerWidth < RUN_DASHBOARD_MOBILE_WIDTH
+/**
+ * The layout the dashboard can actually afford. The PANEL's width decides it
+ * — a 360px sidebar inside a 1600px window must never claim the desktop
+ * split, or the tree column eats the gantt and both end up stubs. The body
+ * element refines the number once it has been measured (the panel width is
+ * the outer shell). Environments without ResizeObserver (jsdom) keep the
+ * panel width.
+ */
+function useDashboardLayout(
+  bodyRef: React.RefObject<HTMLDivElement | null>,
+  panelWidth: number,
+): 'grid' | 'list' {
+  const [measured, setMeasured] = useState<number | undefined>(undefined)
+
+  useEffect(() => {
+    const body = bodyRef.current
+    if (body === null || typeof ResizeObserver === 'undefined') return
+    // Width never feeds back into the body's own width, so this cannot loop.
+    const measure = (): void => {
+      setMeasured(current => (body.clientWidth > 0 ? body.clientWidth : current))
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(body)
+    measure()
+    return () => { observer.disconnect() }
+  }, [bodyRef])
+
+  const width = measured ?? Math.round(panelWidth)
+  return width >= RUN_DASHBOARD_GANTT_MIN_PANEL ? 'grid' : 'list'
+}
+
+/** The state word in the active locale: every surface spells it the same. */
+function stateWord(state: AgentState): string {
+  return formatAgentState(state, isZh() ? 'zh' : 'en')
 }
 
 function agentRowState(row: TimelineDisplay['rows'][number]): string {
   if (row.state === undefined) return row.kind === 'diagnostic' ? t('subagentDiagUnavailable') : t('subagentInactive')
-  return formatAgentState(row.state, isZh() ? 'zh' : 'en')
+  return stateWord(row.state)
 }
 
 function stateFilterLabel(value: string): string {
   if (value === 'all') return t('runDashboardFilterAll')
-  if (value === 'cold') return formatAgentState({ residency: 'cold', lastTurn: 'idle' }, isZh() ? 'zh' : 'en')
-  if (value === 'closed') return formatAgentState({ residency: 'closed' }, isZh() ? 'zh' : 'en')
+  if (value === 'cold') return stateWord({ residency: 'cold', lastTurn: 'idle' })
+  if (value === 'closed') return stateWord({ residency: 'closed' })
   let state: AgentState
   switch (value) {
     case 'waiting':
@@ -417,7 +461,7 @@ function stateFilterLabel(value: string): string {
     default:
       state = { residency: 'live', turn: { kind: 'idle' } }
   }
-  return formatAgentState(state, isZh() ? 'zh' : 'en')
+  return stateWord(state)
 }
 
 function formatTime(value: number | undefined): string {
@@ -426,35 +470,29 @@ function formatTime(value: number | undefined): string {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleTimeString()
 }
 
-function formatDurationMs(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1_000))
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  const rest = seconds % 60
-  if (minutes < 60) return `${minutes}m ${rest}s`
-  const hours = Math.floor(minutes / 60)
-  return `${hours}h ${minutes % 60}m`
-}
-
 function timelineWidth(zoom: number): number {
   return Math.round(TIMELINE_BASE_WIDTH * zoom)
 }
 
-function segmentKind(segment: TimelineSegment): string {
-  if (segment.state.residency !== 'live') return segment.state.residency
-  return segment.state.turn.kind
-}
-
-function segmentStyle(
+/** A segment's placement on the shared range, in percent of the canvas. */
+function segmentGeometry(
   segment: TimelineSegment,
   range: NonNullable<TimelineDisplay['range']>,
   now: number,
-): CSSProperties {
+): { left: number; width: number } {
   const span = Math.max(1, range.end - range.start)
-  const left = ((segment.start - range.start) / span) * 100
-  const end = segment.end ?? now
-  const width = Math.max(1.5, ((end - segment.start) / span) * 100)
-  return { left: `${left}%`, width: `${width}%` }
+  return {
+    left: ((segment.start - range.start) / span) * 100,
+    // A hairline minimum keeps instant transitions (a `closed` point) visible.
+    width: Math.max(0.5, (((segment.end ?? now) - segment.start) / span) * 100),
+  }
+}
+
+/** Short axis stamp: seconds only matter once the grid is finer than a minute. */
+function formatTick(time: number, stepMs: number): string {
+  return new Date(time).toLocaleTimeString([], stepMs < 60_000
+    ? { hour: '2-digit', minute: '2-digit', second: '2-digit' }
+    : { hour: '2-digit', minute: '2-digit' })
 }
 
 function modelLabel(model: SpawnModelSelection | undefined): string {
@@ -563,8 +601,70 @@ function catalogSignature(
   return rows.join('\n')
 }
 
+/**
+ * The gantt bars of one row, laid out on the SHARED display range so two
+ * rows' spans are comparable by eye. Used twice: as the wide canvas lane and
+ * as the per-row spark strip of the narrow list — same geometry, same state
+ * classes, so a bar means the same thing in both layouts.
+ */
+function TimelineBars(props: {
+  row: TimelineDisplayRow
+  range: TimelineDisplay['range']
+  now: number
+  /** Canvas width in px; a bar narrower than a label stays wordless. */
+  labelWidth?: number
+  className?: string
+}) {
+  const { row, range, now, labelWidth, className } = props
+  if (range === null) return <span className={className} />
+  return (
+    <span className={className}>
+      {row.segments.map((segment, index) => {
+        const kind = agentStateKind(segment.state)
+        const { left, width } = segmentGeometry(segment, range, now)
+        const label = stateWord(segment.state)
+        const showLabel = labelWidth !== undefined && (width / 100) * labelWidth >= SEGMENT_LABEL_MIN_PX
+        return (
+          <span
+            key={`${row.id}:${index}:${segment.start}`}
+            className={css.runDashboardSegment}
+            data-segment-state={kind}
+            data-segment-open={segment.end === undefined ? 'true' : undefined}
+            style={{ left: `${left}%`, width: `${width}%` }}
+            title={label}
+          >
+            {showLabel ? label : ''}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
+/**
+ * Status as a shape + word + color, so no single channel carries it alone:
+ * the mark's outline/fill is driven by `data-shape`, the word is always
+ * spelled out, and the tint only reinforces both.
+ */
+function AgentStateBadge(props: { row: TimelineDisplayRow }) {
+  const { row } = props
+  const kind = row.state === undefined ? row.kind : agentStateKind(row.state)
+  const dot = agentDotState(row.state)
+  return (
+    <span className={css.runDashboardBadge} data-state={kind}>
+      <span className={css.runDashboardBadgeMark} data-shape={kind} aria-hidden="true">
+        {dot !== undefined && <StateDot state={dot} size={8} className={css.runDashboardBadgeDot} />}
+      </span>
+      {agentRowState(row)}
+    </span>
+  )
+}
+
 function RunDashboardTreeRow(props: {
   row: TimelineDisplayRow
+  /** Draw the per-row spark strip (the list layout has no shared canvas). */
+  range: TimelineDisplay['range'] | undefined
+  now: number
   selectedAgentId: string | undefined
   locatedOwnerId: string | undefined
   armedCloseId: string | undefined
@@ -576,6 +676,8 @@ function RunDashboardTreeRow(props: {
 }) {
   const {
     row,
+    range,
+    now,
     selectedAgentId,
     locatedOwnerId,
     armedCloseId,
@@ -589,6 +691,20 @@ function RunDashboardTreeRow(props: {
     ? controlState
     : undefined
   const closeArmed = armedCloseId === row.id
+  const active = formatDuration(row.activeDurationMs, t)
+  const segments = t('runDashboardSegmentCount', { count: row.segments.length })
+  const durationTitle = t('runDashboardDurationSummary', {
+    active,
+    wall: formatDuration(row.wallDurationMs, t),
+    segments,
+  })
+  const meta = [row.path, row.model === undefined ? undefined : modelLabel(row.model)]
+    .filter((part): part is string => part !== undefined && part !== '')
+    .join('  ·  ')
+  const span = row.kind === 'diagnostic'
+    ? t('runDashboardTimeUnavailable')
+    : `${formatTime(row.startedAt)} → ${row.endedAt === undefined ? t('runDashboardRunning') : formatTime(row.endedAt)}`
+      + ` · ${t('runDashboardWallDuration')} ${formatDuration(row.wallDurationMs, t)} · ${segments}`
 
   return (
     <div
@@ -602,32 +718,52 @@ function RunDashboardTreeRow(props: {
       )}
       data-run-dashboard-row-id={row.id}
       data-owner-highlighted={locatedOwnerId === row.id ? 'true' : undefined}
-      style={{ paddingLeft: 10 + row.depth * 16 }}
+      style={{ '--run-depth': row.depth } as CSSProperties}
     >
       <span className={css.runDashboardRowHeader}>
-        <span className={css.runDashboardRowTitle}>{row.title}</span>
+        <AgentStateBadge row={row} />
+        <span className={css.runDashboardRowTitle} title={row.title}>{row.title}</span>
         {row.longRunning && <span className={css.runDashboardWarn}>{t('runDashboardLongRunning')}</span>}
-        {row.kind === 'agent' && (
-          <>
+        <span className={css.runDashboardRowDuration} title={durationTitle}>
+          <span className={css.runDashboardSrOnly}>{t('runDashboardActiveDuration')} </span>
+          {active}
+        </span>
+      </span>
+      {range !== undefined && (
+        <TimelineBars
+          row={row}
+          range={range}
+          now={now}
+          className={css.runDashboardSpark}
+        />
+      )}
+      <span className={css.runDashboardRowMeta}>
+        {meta !== '' && <span className={css.runDashboardMeta} title={meta}>{meta}</span>}
+        <span className={css.runDashboardRowSpan} title={span}>{span}</span>
+      </span>
+      {row.kind === 'agent' && (
+        <span className={css.runDashboardActions} role="group" aria-label={t('runDashboardAgentActions', { title: row.title })}>
+          <button
+            type="button"
+            className={clsx(css.runDashboardActionButton, css.runDashboardActionPrimary)}
+            aria-label={`${t('runDashboardOpenChat')} ${row.title}`}
+            onClick={() => { onOpenAgent(row) }}
+          >
+            {t('runDashboardOpenChat')}
+          </button>
+          <button
+            type="button"
+            className={clsx(css.runDashboardActionButton, selectedAgentId === row.id && css.runDashboardActionActive)}
+            aria-label={`${t('runDashboardDetails')} ${row.title}`}
+            aria-pressed={selectedAgentId === row.id}
+            onClick={() => { onSelectAgent(row.id) }}
+          >
+            {t('runDashboardDetails')}
+          </button>
+          <span className={css.runDashboardActionsDanger}>
             <button
               type="button"
-              className={css.runDashboardDetailButton}
-              aria-label={`${t('runDashboardOpenChat')} ${row.title}`}
-              onClick={() => { onOpenAgent(row) }}
-            >
-              {t('runDashboardOpenChat')}
-            </button>
-            <button
-              type="button"
-              className={clsx(css.runDashboardDetailButton, selectedAgentId === row.id && css.runDashboardDetailButtonActive)}
-              aria-label={`${t('runDashboardDetails')} ${row.title}`}
-              onClick={() => { onSelectAgent(row.id) }}
-            >
-              {t('runDashboardDetails')}
-            </button>
-            <button
-              type="button"
-              className={css.runDashboardDetailButton}
+              className={css.runDashboardActionButton}
               aria-label={`${t('runDashboardInterrupt')} ${row.title}`}
               disabled={!canInterruptAgent(row) || rowControl?.kind === 'loading'}
               onClick={() => { onInterruptAgent(row) }}
@@ -636,16 +772,16 @@ function RunDashboardTreeRow(props: {
             </button>
             <button
               type="button"
-              className={clsx(css.runDashboardDetailButton, closeArmed && css.runDashboardDangerButton)}
+              className={clsx(css.runDashboardActionButton, closeArmed && css.runDashboardDangerButton)}
               aria-label={`${closeArmed ? t('runDashboardConfirmClose') : t('runDashboardCloseAgent')} ${row.title}`}
               disabled={!canCloseAgent(row) || rowControl?.kind === 'loading'}
               onClick={() => { onCloseAgent(row) }}
             >
               {closeArmed ? t('runDashboardConfirmClose') : t('runDashboardCloseAgent')}
             </button>
-          </>
-        )}
-      </span>
+          </span>
+        </span>
+      )}
       {rowControl !== undefined && (
         <span className={clsx(
           css.runDashboardControlResult,
@@ -656,21 +792,48 @@ function RunDashboardTreeRow(props: {
             : agentControlOutcomeLabel(rowControl.action, rowControl.outcome)}
         </span>
       )}
-      <span className={css.runDashboardStatus}>{agentRowState(row)}</span>
-      {row.path !== undefined && <span className={css.runDashboardMeta}>{row.path}</span>}
-      {row.model !== undefined && <span className={css.runDashboardMeta}>{modelLabel(row.model)}</span>}
-      {row.kind === 'diagnostic'
-        ? <span className={css.runDashboardMeta}>{t('runDashboardTimeUnavailable')}</span>
-        : (
-          <span className={css.runDashboardMeta}>
-            start {formatTime(row.startedAt)} · end {formatTime(row.endedAt)}
-          </span>
-        )}
-      <span className={css.runDashboardMeta}>
-        active {formatDurationMs(row.activeDurationMs)} · wall {formatDurationMs(row.wallDurationMs)} · {row.segments.length} segments
-      </span>
     </div>
   )
+}
+
+/**
+ * Keep every gantt lane exactly as tall as its tree row. The two live in
+ * separate scroll columns, so nothing but equal heights aligns them — and row
+ * height is content-driven (locale, wrapped actions, a control result), which
+ * a fixed height would silently desync. Environments without ResizeObserver
+ * (jsdom) fall back to the CSS min-height both sides share.
+ */
+function useLaneHeights(
+  treeRef: React.RefObject<HTMLDivElement | null>,
+  rowKey: string,
+): Record<string, number> {
+  const [heights, setHeights] = useState<Record<string, number>>({})
+  useEffect(() => {
+    const tree = treeRef.current
+    if (tree === null || typeof ResizeObserver === 'undefined') return
+    const measure = (): void => {
+      const next: Record<string, number> = {}
+      for (const element of tree.querySelectorAll<HTMLElement>('[data-run-dashboard-row-id]')) {
+        const id = element.dataset.runDashboardRowId
+        if (id !== undefined) next[id] = element.offsetHeight
+      }
+      setHeights(current => {
+        const keys = Object.keys(next)
+        const same = keys.length === Object.keys(current).length
+          && keys.every(id => current[id] === next[id])
+        return same ? current : next
+      })
+    }
+    // Lanes never feed back into row height, so this observer cannot loop.
+    const observer = new ResizeObserver(measure)
+    observer.observe(tree)
+    for (const element of tree.querySelectorAll<HTMLElement>('[data-run-dashboard-row-id]')) {
+      observer.observe(element)
+    }
+    measure()
+    return () => { observer.disconnect() }
+  }, [treeRef, rowKey])
+  return heights
 }
 
 function RunDashboardRows(props: {
@@ -710,6 +873,10 @@ function RunDashboardRows(props: {
   const width = timelineWidth(zoom)
   const range = display.range
   const dragStartRef = useRef<{ x: number; width: number } | null>(null)
+  const treeRef = useRef<HTMLDivElement>(null)
+  const laneHeights = useLaneHeights(treeRef, display.rows.map(row => row.id).join('\u0000'))
+  const ticks = useMemo(() => timelineTicks(range, width), [range, width])
+  const tickStep = ticks.length > 1 ? ticks[1]!.time - ticks[0]!.time : 60_000
 
   const setClampedTreeWidth = useCallback((next: number): void => {
     setTreeWidth(Math.min(maxTreeWidth, Math.max(RUN_DASHBOARD_TREE_MIN, Math.round(next))))
@@ -734,11 +901,14 @@ function RunDashboardRows(props: {
 
   return (
     <div className={css.runDashboardGrid} role="treegrid" aria-label={t('subagent')}>
-      <div className={css.runDashboardTree} style={{ width: treeWidth }}>
+      <div className={css.runDashboardTree} style={{ width: treeWidth }} ref={treeRef}>
+        <div className={css.runDashboardTreeHead} aria-hidden="true" />
         {display.rows.map(row => (
           <RunDashboardTreeRow
             key={row.id}
             row={row}
+            range={undefined}
+            now={now}
             selectedAgentId={selectedAgentId}
             locatedOwnerId={locatedOwnerId}
             armedCloseId={armedCloseId}
@@ -781,38 +951,60 @@ function RunDashboardRows(props: {
           data-timeline-range-ms={range === null ? undefined : range.end - range.start}
           style={{ width }}
         >
-          <div className={css.runDashboardScale}>
-            <span>{range === null ? '—' : formatTime(range.start)}</span>
-            <span>{range === null ? '—' : formatTime(range.end)}</span>
+          <div className={css.runDashboardScale} aria-hidden="true">
+            {ticks.map(tick => (
+              <span
+                key={tick.time}
+                className={css.runDashboardTick}
+                data-timeline-tick
+                style={{ left: `${tick.ratio * 100}%` }}
+              >
+                {formatTick(tick.time, tickStep)}
+              </span>
+            ))}
           </div>
-          {display.rows.map(row => (
-            <div
-              key={row.id}
-              className={clsx(css.runDashboardLane, locatedOwnerId === row.id && css.runDashboardOwnerLocated)}
-              data-run-dashboard-lane-id={row.id}
-              data-owner-highlighted={locatedOwnerId === row.id ? 'true' : undefined}
-            >
-              {range !== null && row.segments.map((segment, index) => (
-                <span
-                  key={`${row.id}:${index}:${segment.start}`}
-                  className={clsx(css.runDashboardSegment, css[`segment_${segmentKind(segment)}`])}
-                  data-segment-state={segmentKind(segment)}
-                  style={segmentStyle(segment, range, now)}
-                  title={formatAgentState(segment.state, isZh() ? 'zh' : 'en')}
-                >
-                  {formatAgentState(segment.state, isZh() ? 'zh' : 'en')}
-                </span>
-              ))}
-            </div>
-          ))}
+          <div className={css.runDashboardLanes}>
+            {ticks.map(tick => (
+              <span
+                key={tick.time}
+                className={css.runDashboardGridline}
+                data-timeline-gridline
+                style={{ left: `${tick.ratio * 100}%` }}
+                aria-hidden="true"
+              />
+            ))}
+            {display.rows.map(row => (
+              <div
+                key={row.id}
+                className={clsx(css.runDashboardLane, locatedOwnerId === row.id && css.runDashboardOwnerLocated)}
+                data-run-dashboard-lane-id={row.id}
+                data-owner-highlighted={locatedOwnerId === row.id ? 'true' : undefined}
+                style={laneHeights[row.id] === undefined ? undefined : { height: laneHeights[row.id] }}
+              >
+                <TimelineBars
+                  row={row}
+                  range={range}
+                  now={now}
+                  labelWidth={width}
+                  className={css.runDashboardLaneBars}
+                />
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
   )
 }
 
-function RunDashboardMobile(props: {
+/**
+ * The narrow layout: no side-by-side canvas, but every row keeps its spark
+ * strip on the SHARED range, so spans stay comparable and each row still
+ * shows its duration at a glance. Also the mobile fallback.
+ */
+function RunDashboardList(props: {
   display: TimelineDisplay
+  now: number
   selectedAgentId: string | undefined
   locatedOwnerId: string | undefined
   onSelectAgent: (agentSessionId: string) => void
@@ -823,11 +1015,13 @@ function RunDashboardMobile(props: {
   onCloseAgent: (row: TimelineDisplayRow) => void
 }) {
   return (
-    <div data-mobile-run-dashboard className={css.runDashboardMobile} role="treegrid" aria-label={t('subagent')}>
+    <div data-run-dashboard-list className={css.runDashboardList} role="treegrid" aria-label={t('subagent')}>
       {props.display.rows.map(row => (
         <RunDashboardTreeRow
           key={row.id}
           row={row}
+          range={props.display.range}
+          now={props.now}
           selectedAgentId={props.selectedAgentId}
           locatedOwnerId={props.locatedOwnerId}
           armedCloseId={props.armedCloseId}
@@ -842,6 +1036,12 @@ function RunDashboardMobile(props: {
   )
 }
 
+/**
+ * Free text and status always fit on one line; the narrower filters live in
+ * a disclosure so a 360px sidebar never shows five 55px stubs. Collapsed is
+ * NOT hidden — every input stays mounted and labelled, and the summary
+ * counts what is currently narrowing the tree.
+ */
 function RunDashboardFilters(props: {
   filters: TimelineDisplayFilters
   onChange: (filters: TimelineDisplayFilters) => void
@@ -850,47 +1050,63 @@ function RunDashboardFilters(props: {
   const set = (patch: TimelineDisplayFilters): void => {
     onChange({ ...filters, ...patch })
   }
+  const activeCount = countActiveFilters(filters)
   return (
-    <div className={css.runDashboardFilters}>
-      <select
-        aria-label={t('runDashboardFilterState')}
-        value={filters.state ?? 'all'}
-        onChange={(event) => { set({ state: event.currentTarget.value }) }}
-      >
-        {STATE_FILTER_OPTIONS.map(value => (
-          <option key={value} value={value}>{stateFilterLabel(value)}</option>
-        ))}
-      </select>
-      <input
-        aria-label={t('runDashboardFilterModel')}
-        value={filters.model ?? ''}
-        placeholder={t('runDashboardFilterModel')}
-        onInput={(event) => { set({ model: event.currentTarget.value }) }}
-        onChange={(event) => { set({ model: event.currentTarget.value }) }}
-      />
-      <input
-        aria-label={t('runDashboardFilterPath')}
-        value={filters.path ?? ''}
-        placeholder={t('runDashboardFilterPath')}
-        onInput={(event) => { set({ path: event.currentTarget.value }) }}
-        onChange={(event) => { set({ path: event.currentTarget.value }) }}
-      />
-      <input
-        aria-label={t('runDashboardFilterText')}
-        value={filters.text ?? ''}
-        placeholder={t('runDashboardFilterText')}
-        onInput={(event) => { set({ text: event.currentTarget.value }) }}
-        onChange={(event) => { set({ text: event.currentTarget.value }) }}
-      />
-      <label className={css.runDashboardCheck}>
+    <div className={css.runDashboardFilters} role="group" aria-label={t('runDashboardFilterGroup')}>
+      <div className={css.runDashboardFilterRow}>
         <input
-          aria-label={t('runDashboardFilterLongRunning')}
-          type="checkbox"
-          checked={filters.longRunningOnly === true}
-          onChange={(event) => { set({ longRunningOnly: event.currentTarget.checked }) }}
+          className={css.runDashboardFilterSearch}
+          aria-label={t('runDashboardFilterText')}
+          value={filters.text ?? ''}
+          placeholder={t('runDashboardFilterText')}
+          onInput={(event) => { set({ text: event.currentTarget.value }) }}
+          onChange={(event) => { set({ text: event.currentTarget.value }) }}
         />
-        <span>{t('runDashboardFilterLongRunning')}</span>
-      </label>
+        <select
+          aria-label={t('runDashboardFilterState')}
+          value={filters.state ?? 'all'}
+          onChange={(event) => { set({ state: event.currentTarget.value }) }}
+        >
+          {STATE_FILTER_OPTIONS.map(value => (
+            <option key={value} value={value}>{stateFilterLabel(value)}</option>
+          ))}
+        </select>
+      </div>
+      <details className={css.runDashboardFilterMore} data-filters-active={activeCount}>
+        <summary className={css.runDashboardFilterSummary}>
+          <span>{t('runDashboardMoreFilters')}</span>
+          {activeCount > 0 && (
+            <span className={css.runDashboardFilterBadge}>
+              {t('runDashboardFiltersActive', { count: activeCount })}
+            </span>
+          )}
+        </summary>
+        <div className={css.runDashboardFilterGrid}>
+          <input
+            aria-label={t('runDashboardFilterModel')}
+            value={filters.model ?? ''}
+            placeholder={t('runDashboardFilterModel')}
+            onInput={(event) => { set({ model: event.currentTarget.value }) }}
+            onChange={(event) => { set({ model: event.currentTarget.value }) }}
+          />
+          <input
+            aria-label={t('runDashboardFilterPath')}
+            value={filters.path ?? ''}
+            placeholder={t('runDashboardFilterPath')}
+            onInput={(event) => { set({ path: event.currentTarget.value }) }}
+            onChange={(event) => { set({ path: event.currentTarget.value }) }}
+          />
+          <label className={css.runDashboardCheck}>
+            <input
+              aria-label={t('runDashboardFilterLongRunning')}
+              type="checkbox"
+              checked={filters.longRunningOnly === true}
+              onChange={(event) => { set({ longRunningOnly: event.currentTarget.checked }) }}
+            />
+            <span>{t('runDashboardFilterLongRunning')}</span>
+          </label>
+        </div>
+      </details>
     </div>
   )
 }
@@ -964,7 +1180,6 @@ export function SubagentView(props: {
   const [filters, setFilters] = useState<TimelineDisplayFilters>({ state: 'all' })
   const [now, setNow] = useState(() => Date.now())
   const [zoom, setZoom] = useState(1)
-  const [mobile] = useState(isMobileDashboard)
   const [localTreeWidth, setLocalTreeWidth] = useState(() => defaultRunDashboardTreeWidth(PANEL_DEFAULT))
   const appliedSeqRef = useRef<number | undefined>(undefined)
   const requestRef = useRef<AbortController | undefined>(undefined)
@@ -991,6 +1206,7 @@ export function SubagentView(props: {
     [rootId, catalogs, byId],
   )
   const panelWidth = storeSnapshot?.state?.width ?? PANEL_DEFAULT
+  const layout = useDashboardLayout(bodyRef, panelWidth)
   const maxTreeWidth = Math.max(RUN_DASHBOARD_TREE_MIN, Math.round(panelWidth) - RUN_DASHBOARD_TREE_MIN)
   const rawTreeWidth = storeSnapshot?.state?.runDashboardTreeWidth ?? localTreeWidth
   const treeWidth = clampRunDashboardTreeWidth(rawTreeWidth, panelWidth)
@@ -1240,8 +1456,8 @@ export function SubagentView(props: {
         </button>
       </div>
       <div className={css.subagentBody} ref={bodyRef}>
-        {!mobile && (
-          <div className={css.runDashboardToolbar}>
+        {layout === 'grid' && (
+          <div className={css.runDashboardToolbar} role="group" aria-label={t('runDashboardViewport')}>
             <button type="button" aria-label={t('runDashboardZoomIn')} onClick={zoomIn}>{t('runDashboardZoomIn')}</button>
             <button type="button" aria-label={t('runDashboardZoomOut')} onClick={zoomOut}>{t('runDashboardZoomOut')}</button>
             <button type="button" aria-label={t('runDashboardFitAll')} onClick={fitAll}>{t('runDashboardFitAll')}</button>
@@ -1272,10 +1488,11 @@ export function SubagentView(props: {
             <div className={css.subagentEmptyHint}>{t('subagentEmptyDesc')}</div>
           </div>
         )}
-        {filteredDisplay !== undefined && (mobile
+        {filteredDisplay !== undefined && (layout === 'list'
           ? (
-            <RunDashboardMobile
+            <RunDashboardList
               display={filteredDisplay}
+              now={now}
               selectedAgentId={detailState.kind === 'idle' ? undefined : detailState.agentSessionId}
               locatedOwnerId={locatedOwnerId}
               onSelectAgent={toggleAgentDetail}

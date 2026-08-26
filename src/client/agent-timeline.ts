@@ -6,6 +6,7 @@ import type {
   TimelineStatePoint,
 } from '../agent-timeline-routes.ts'
 import type { SidebarSubagentCatalog } from '../context-types.ts'
+import type { CopyKey } from './locales.ts'
 
 export interface TimelineSegment {
   start: number
@@ -93,6 +94,94 @@ export function normalizeLongRunningMinutes(value: unknown): number {
   const minutes = Math.round(value)
   if (minutes < 0 || minutes > MAX_LONG_RUNNING_MINUTES) return DEFAULT_LONG_RUNNING_MINUTES
   return minutes
+}
+
+/**
+ * The single word that identifies an agent state across the dashboard: the
+ * residency when the agent is not live, else the turn kind. Status filters,
+ * gantt segment styling and the state dot all key off this one derivation.
+ */
+export function agentStateKind(state: AgentState): string {
+  return state.residency === 'live' ? state.turn.kind : state.residency
+}
+
+/** The state-dot semantics of an agent state, mirroring the job dot colors. */
+export function agentDotState(state: AgentState | undefined): 'ongoing' | 'warning' | 'done' | 'error' | undefined {
+  if (state === undefined) return undefined
+  switch (agentStateKind(state)) {
+    case 'provisioning':
+    case 'running':
+      return 'ongoing'
+    case 'waiting':
+    case 'interrupted':
+      return 'warning'
+    case 'errored':
+      return 'error'
+    default:
+      // idle / completed / cold / closed: settled work, no attention needed.
+      return 'done'
+  }
+}
+
+/** One labeled gridline of the shared gantt axis. */
+export interface TimelineTick {
+  /** Wall-clock instant of the gridline. */
+  time: number
+  /** Position within the display range, 0 (start) to 1 (end). */
+  ratio: number
+}
+
+/**
+ * Human-readable gridline steps, coarsest last. The axis picks the first one
+ * that keeps labels at least {@link MIN_TICK_GAP_PX} apart, so a zoomed-in
+ * canvas gets seconds and a day-long run gets hours — never a wall of
+ * unreadable, overlapping stamps.
+ */
+const TICK_STEPS_MS: readonly number[] = [
+  1_000, 2_000, 5_000, 10_000, 15_000, 30_000,
+  60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
+  3_600_000, 7_200_000, 21_600_000, 43_200_000, 86_400_000,
+]
+const MIN_TICK_GAP_PX = 76
+
+/**
+ * The gridlines of a gantt canvas `widthPx` wide showing `range`. Ticks land
+ * on round local-clock instants (the timezone offset shifts the epoch grid),
+ * which is what makes two rows' bars comparable by eye.
+ */
+export function timelineTicks(range: TimelineDisplay['range'], widthPx: number): TimelineTick[] {
+  if (range === null) return []
+  const span = Math.max(1, range.end - range.start)
+  const maxTicks = Math.max(2, Math.floor(widthPx / MIN_TICK_GAP_PX))
+  const step = TICK_STEPS_MS.find(candidate => span / candidate <= maxTicks)
+    ?? Math.ceil(span / maxTicks / 86_400_000) * 86_400_000
+  // Epoch multiples are UTC-aligned; shifting by the offset puts the grid on
+  // round LOCAL times, which is what the labels show.
+  const offset = new Date(range.start).getTimezoneOffset() * 60_000
+  const first = Math.ceil((range.start - offset) / step) * step + offset
+  const ticks: TimelineTick[] = []
+  for (let time = first; time <= range.end; time += step) {
+    ticks.push({ time, ratio: (time - range.start) / span })
+  }
+  return ticks
+}
+
+/**
+ * Elapsed time in at most two adjacent units, localized through the passed
+ * translator. Shared by agent rows and background jobs so one run reads with
+ * one duration vocabulary; hours is the widest unit.
+ */
+export function formatDuration(
+  elapsedMs: number,
+  t: (key: CopyKey, params?: Record<string, string | number>) => string,
+): string {
+  const total = Math.max(0, Math.floor(elapsedMs / 1_000))
+  const seconds = total % 60
+  const minutes = Math.floor(total / 60) % 60
+  const hours = Math.floor(total / 3_600)
+  if (hours > 0) return t('durationHours', { hours, minutes })
+  if (minutes > 0) return t('durationMinutes', { minutes, seconds })
+  return t('durationSeconds', { seconds })
 }
 
 export function filterTimelineDisplay(display: TimelineDisplay, filters: TimelineDisplayFilters): TimelineDisplay {
@@ -438,9 +527,7 @@ function rowMatchesFilters(row: TimelineDisplayRow, filters: NormalizedFilters):
 }
 
 function stateFilterKey(row: TimelineDisplayRow): string {
-  if (row.state === undefined) return row.kind
-  if (row.state.residency !== 'live') return row.state.residency
-  return row.state.turn.kind
+  return row.state === undefined ? row.kind : agentStateKind(row.state)
 }
 
 function modelText(row: TimelineDisplayRow): string {
@@ -462,4 +549,21 @@ function searchText(row: TimelineDisplayRow): string {
     row.state === undefined ? undefined : formatAgentState(row.state, 'zh'),
     row.state === undefined ? undefined : formatAgentState(row.state, 'en'),
   ].filter(Boolean).join(' ').toLowerCase()
+}
+
+/**
+ * How many filters are currently narrowing the tree. Drives the collapsed
+ * filter disclosure's badge: a user must be able to tell that rows are
+ * missing because of a filter they cannot see.
+ */
+export function countActiveFilters(filters: TimelineDisplayFilters): number {
+  const normalized = normalizeFilters(filters)
+  if (normalized === null) return 0
+  return [
+    normalized.state !== 'all',
+    normalized.model !== '',
+    normalized.path !== '',
+    normalized.text !== '',
+    normalized.longRunningOnly,
+  ].filter(Boolean).length
 }

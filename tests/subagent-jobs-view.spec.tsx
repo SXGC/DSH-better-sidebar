@@ -11,8 +11,21 @@ import { createElement, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 import { SubagentView } from '../src/client/SubagentView.tsx'
+import { createSidebarStore } from '../src/client/state.ts'
 import type { AgentTimelineResult } from '../src/agent-timeline-routes.ts'
 import type { Context, SidebarSessionList } from '../src/context-types.ts'
+
+/**
+ * A sidebar store whose panel is wide enough for the split tree + gantt: the
+ * owner-location highlight has to land on the row AND its lane, and lanes
+ * only exist once the panel can carry a canvas beside the tree.
+ */
+function wideSidebarStore(width = 900) {
+  const store = createSidebarStore()
+  store.setSession('root')
+  store.update((draft) => { draft.width = width })
+  return store
+}
 
 /** A subscribable sessions-list snapshot (mirror of the runtime list feed). */
 function makeStore(initial: SidebarSessionList) {
@@ -118,6 +131,7 @@ function baseSnapshot(): SidebarSessionList {
 }
 
 beforeEach(() => {
+  localStorage.clear()
   outputCalls.length = 0
   killCalls.length = 0
   scrollIntoViewTargets.length = 0
@@ -153,6 +167,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  localStorage.clear()
   vi.unstubAllGlobals()
   for (const el of document.querySelectorAll('body > div')) el.remove()
 })
@@ -204,7 +219,7 @@ describe('SubagentView background jobs', () => {
   it('locates a linked owner without closing the selected output dock', async () => {
     const store = makeStore(baseSnapshot())
     const { container, unmount } = mount(
-      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(store) }),
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(store), store: wideSidebarStore() }),
     )
     await act(async () => {})
 
@@ -229,7 +244,7 @@ describe('SubagentView background jobs', () => {
   it('locates an owner hidden by filters and keeps the selected output dock', async () => {
     const store = makeStore(baseSnapshot())
     const { container, unmount } = mount(
-      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(store) }),
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(store), store: wideSidebarStore() }),
     )
     await act(async () => {})
 

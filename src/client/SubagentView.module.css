@@ -106,6 +106,7 @@
 
 /* ── Run Dashboard tree-gantt ─────────────────────────────────────────── */
 
+/* Viewport controls: only mounted next to a real gantt canvas. */
 .runDashboardToolbar {
   display: flex;
   flex-wrap: wrap;
@@ -116,6 +117,7 @@
 
 .runDashboardToolbar button {
   height: 24px;
+  padding: 0 8px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
   background: transparent;
@@ -129,19 +131,30 @@
   color: var(--dsw-alias-label-primary);
 }
 
+/* ── Filters ───────────────────────────────────────────────────────────
+   Free text + status always fit one line; the rest lives in a disclosure.
+   Five side-by-side fields become 55px stubs in a 360px sidebar, which is
+   worse than two usable fields plus a labelled "more" affordance. */
+
 .runDashboardFilters {
-  display: grid;
-  grid-template-columns: minmax(98px, 0.8fr) repeat(3, minmax(0, 1fr)) auto;
+  display: flex;
+  flex-direction: column;
   gap: 4px;
   padding: 0 2px 6px;
 }
 
+.runDashboardFilterRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(84px, 116px);
+  gap: 4px;
+}
+
 .runDashboardFilters select,
-.runDashboardFilters input[type="text"],
-.runDashboardFilters input:not([type]) {
+.runDashboardFilters input:not([type="checkbox"]) {
   min-width: 0;
-  height: 24px;
+  height: 26px;
   box-sizing: border-box;
+  padding: 0 7px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
   background: var(--dsw-alias-bg-base);
@@ -149,19 +162,87 @@
   font: var(--dsw-font-xxxs-11);
 }
 
-.runDashboardFilters input {
-  padding: 0 7px;
+.runDashboardFilters select:focus-visible,
+.runDashboardFilters input:focus-visible {
+  outline: none;
+  border-color: var(--dsw-alias-border-l4);
+}
+
+.runDashboardFilterSearch {
+  width: 100%;
+}
+
+.runDashboardFilterSummary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxxs-strong-11);
+  cursor: pointer;
+  list-style: none;
+}
+
+.runDashboardFilterSummary::-webkit-details-marker {
+  display: none;
+}
+
+/* A CSS-drawn chevron: no icon import, and it rotates with [open]. */
+.runDashboardFilterSummary::before {
+  content: '';
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.runDashboardFilterMore[open] .runDashboardFilterSummary::before {
+  transform: rotate(45deg);
+}
+
+.runDashboardFilterSummary:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* "N active": the only cue that rows are missing because of a collapsed
+   filter, so it stays visible while the disclosure is shut. */
+.runDashboardFilterBadge {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+  line-height: 16px;
+}
+
+.runDashboardFilterGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px;
+  padding: 4px 0 2px;
 }
 
 .runDashboardCheck {
+  grid-column: 1 / -1;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 24px;
+  height: 20px;
   color: var(--dsw-alias-label-secondary);
   font: var(--dsw-font-xxxs-11);
   white-space: nowrap;
 }
+
+/* ── Layouts ───────────────────────────────────────────────────────────
+   Two shapes for the same rows: a split tree + shared canvas once the
+   panel can afford both, and a single card list below that. */
 
 .runDashboardGrid {
   display: grid;
@@ -172,6 +253,17 @@
   overflow: hidden;
 }
 
+.runDashboardList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.runDashboardList .runDashboardRow {
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+}
+
 .runDashboardTree {
   position: sticky;
   left: 0;
@@ -179,6 +271,14 @@
   min-width: 128px;
   background: var(--dsw-alias-bg-base);
   border-right: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* Pads the tree column down by exactly one axis strip, so lane N lines up
+   with row N instead of sitting 24px high. */
+.runDashboardTreeHead {
+  height: 24px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
 }
 
 .runDashboardSplitter {
@@ -204,15 +304,40 @@
   min-width: 100%;
 }
 
+/* The axis. Stamps are positioned by their tick ratio, so they must not be
+   laid out by the flow — `left` only bites on a positioned child. */
 .runDashboardScale {
-  display: flex;
-  justify-content: space-between;
+  position: relative;
   height: 24px;
-  padding: 0 8px;
+  box-sizing: border-box;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
   font: var(--dsw-font-xxxs-11);
   color: var(--dsw-alias-label-tertiary);
 }
+
+.runDashboardTick {
+  position: absolute;
+  top: 5px;
+  transform: translateX(-50%);
+  padding: 0 4px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.runDashboardLanes {
+  position: relative;
+}
+
+.runDashboardGridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--dsw-alias-border-l1);
+  opacity: 0.6;
+}
+
+/* ── Rows ─────────────────────────────────────────────────────────────── */
 
 .runDashboardRow,
 .runDashboardLane {
@@ -221,15 +346,34 @@
   border-bottom: 1px solid var(--dsw-alias-border-l1);
 }
 
+/* Depth reads as indent + a connector hairline, capped at 4 levels so a
+   deep tree can never squeeze the title out of a 360px sidebar. */
 .runDashboardRow {
+  --run-indent: calc(min(var(--run-depth, 0), 4) * 11px);
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px;
+  gap: 3px;
+  padding: 7px 8px 8px calc(8px + var(--run-indent));
+}
+
+.runDashboardRow::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(2px + var(--run-indent));
+  width: 1px;
+  background: var(--dsw-alias-border-l2);
 }
 
 .runDashboardRootRow {
   background: var(--dsw-alias-interactive-bg-active);
+}
+
+/* Depth 0 has nothing to connect to. */
+.runDashboardRootRow::before {
+  content: none;
 }
 
 .runDashboardContextRow {
@@ -245,20 +389,32 @@
   position: relative;
 }
 
-.runDashboardRowTitle {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font: var(--dsw-font-s-14);
-  color: var(--dsw-alias-label-primary);
-}
-
+/* Line 1: status, name, duration. Nothing else competes here. */
 .runDashboardRowHeader {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+.runDashboardRowTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--dsw-font-xxs-strong-12);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The one number the page is read for: fixed-width digits so a ticking
+   clock cannot reflow the title beside it. */
+.runDashboardRowDuration {
+  flex: none;
+  font: var(--dsw-font-xxxs-strong-11);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
 }
 
 .runDashboardWarn {
@@ -270,31 +426,309 @@
   font: var(--dsw-font-xxxs-strong-11);
 }
 
-.runDashboardDetailButton {
+/* Line 3: context. Muted, single line, full text on hover. */
+.runDashboardRowMeta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.runDashboardMeta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Raw clock/wall/segment figures: always in the accessibility tree and in
+   the row's tooltip, but only spelled out where the column is wide enough
+   to carry them without crowding the duration. */
+.runDashboardRowSpan,
+.runDashboardSrOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.runDashboardGrid .runDashboardRowSpan {
+  position: static;
   flex: none;
-  height: 20px;
-  padding: 0 6px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: hidden;
+  clip-path: none;
+  text-overflow: ellipsis;
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ── Status badge ──────────────────────────────────────────────────────
+   Three channels: the mark's SHAPE (severity), the WORD (exact state) and
+   a tint. Any one of them alone identifies an attention-worthy row, so a
+   colour-blind reader or a greyscale screenshot loses nothing. */
+
+.runDashboardBadge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 6px 0 5px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+  white-space: nowrap;
+}
+
+.runDashboardBadgeMark {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 10px;
+  color: currentColor;
+}
+
+.runDashboardBadgeDot {
+  flex: none;
+}
+
+/* Severity shapes, drawn on the mark itself (the dot inside carries the
+   DSH colour semantics). */
+.runDashboardBadgeMark[data-shape="provisioning"],
+.runDashboardBadgeMark[data-shape="running"] {
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px currentColor;
+}
+
+.runDashboardBadgeMark[data-shape="waiting"],
+.runDashboardBadgeMark[data-shape="interrupted"] {
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px currentColor;
+}
+
+.runDashboardBadgeMark[data-shape="errored"] {
+  transform: rotate(45deg);
+  box-shadow: 0 0 0 1px currentColor;
+}
+
+.runDashboardBadgeMark[data-shape="agent"],
+.runDashboardBadgeMark[data-shape="root"],
+.runDashboardBadgeMark[data-shape="diagnostic"] {
+  border: 1px dashed currentColor;
+  border-radius: 2px;
+}
+
+.runDashboardBadge[data-state="provisioning"],
+.runDashboardBadge[data-state="running"] {
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);
+  color: var(--dsw-alias-label-primary);
+}
+
+.runDashboardBadge[data-state="waiting"],
+.runDashboardBadge[data-state="interrupted"] {
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent);
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.runDashboardBadge[data-state="errored"] {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.runDashboardBadge[data-state="cold"],
+.runDashboardBadge[data-state="closed"],
+.runDashboardBadge[data-state="diagnostic"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ── Gantt bars ────────────────────────────────────────────────────────
+   One continuous track per row, not a row of pills: segments are flush
+   fills clipped by the track, separated by a hairline, so two rows' spans
+   stay comparable and a 3px slice still reads as part of one run. */
+
+.runDashboardSpark,
+.runDashboardLaneBars {
+  position: relative;
+  display: block;
+  border-radius: 3px;
+  background: var(--dsw-alias-bg-subtle);
+  overflow: hidden;
+}
+
+.runDashboardSpark {
+  height: 6px;
+  margin: 1px 0 2px;
+}
+
+.runDashboardLaneBars {
+  height: 14px;
+  margin: 12px 8px;
+}
+
+.runDashboardSegment {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: block;
+  min-width: 2px;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding: 0 5px;
+  box-shadow: inset -1px 0 0 var(--dsw-alias-bg-base);
+  background-color: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-strong-11);
+  line-height: 14px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* An open-ended span has no right edge to draw: fade it into the track so
+   "still running" never reads as "finished here". */
+.runDashboardSegment[data-segment-open="true"] {
+  box-shadow: none;
+  mask-image: linear-gradient(to right, rgb(0 0 0) 65%, rgb(0 0 0 / 25%));
+}
+
+/* Fill = colour + weave. The weave is what survives greyscale. */
+.runDashboardSegment[data-segment-state="running"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 26%, transparent);
+}
+
+.runDashboardSegment[data-segment-state="provisioning"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--dsw-alias-state-success-primary) 34%, transparent) 0 2px,
+    transparent 2px 6px
+  );
+}
+
+.runDashboardSegment[data-segment-state="waiting"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent);
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--dsw-alias-state-warn-primary) 40%, transparent) 0 2px,
+    transparent 2px 4px
+  );
+}
+
+.runDashboardSegment[data-segment-state="interrupted"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+  background-image: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--dsw-alias-state-warn-primary) 38%, transparent) 0 1px,
+    transparent 1px 4px
+  );
+}
+
+.runDashboardSegment[data-segment-state="errored"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
+  background-image:
+    repeating-linear-gradient(45deg, color-mix(in srgb, var(--dsw-alias-state-error-primary) 34%, transparent) 0 1px, transparent 1px 4px),
+    repeating-linear-gradient(-45deg, color-mix(in srgb, var(--dsw-alias-state-error-primary) 34%, transparent) 0 1px, transparent 1px 4px);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.runDashboardSegment[data-segment-state="idle"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-label-secondary) 10%, transparent);
+}
+
+.runDashboardSegment[data-segment-state="completed"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-label-secondary) 16%, transparent);
+}
+
+.runDashboardSegment[data-segment-state="cold"],
+.runDashboardSegment[data-segment-state="closed"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-label-tertiary) 8%, transparent);
+  background-image: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--dsw-alias-label-tertiary) 34%, transparent) 0 1px,
+    transparent 1px 5px
+  );
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* ── Row actions ──────────────────────────────────────────────────────
+   Their own line, never sharing one with the name. Quiet by default; the
+   destructive pair sits apart on the right and only warms up on hover. */
+
+.runDashboardActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding-top: 2px;
+}
+
+.runDashboardActionsDanger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.runDashboardActionButton {
+  flex: none;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--dsw-alias-label-tertiary);
   font: var(--dsw-font-xxxs-strong-11);
   cursor: pointer;
 }
 
-.runDashboardDetailButton:hover,
-.runDashboardDetailButtonActive {
+.runDashboardActionButton:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
 }
 
-.runDashboardDetailButton:disabled {
-  opacity: 0.45;
+.runDashboardActionButton:focus-visible {
+  outline: none;
+  border-color: var(--dsw-alias-border-l4);
+}
+
+.runDashboardActionButton:disabled {
+  opacity: 0.4;
   cursor: default;
 }
 
-.runDashboardDangerButton {
+.runDashboardActionPrimary {
+  border-color: var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.runDashboardActionActive {
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-primary);
+}
+
+.runDashboardActionsDanger .runDashboardActionButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.runDashboardDangerButton,
+.runDashboardDangerButton:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, var(--dsw-alias-border-l2));
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
   color: var(--dsw-alias-state-error-primary);
 }
 
@@ -310,69 +744,7 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
-.runDashboardStatus,
-.runDashboardMeta {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font: var(--dsw-font-xxxs-11);
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.runDashboardStatus {
-  color: var(--dsw-alias-label-secondary);
-}
-
-.runDashboardSegment {
-  position: absolute;
-  top: 20px;
-  display: block;
-  min-width: 10px;
-  height: 20px;
-  overflow: hidden;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 999px;
-  padding: 0 6px;
-  background: var(--dsw-alias-interactive-bg-active);
-  color: var(--dsw-alias-label-primary);
-  font: var(--dsw-font-xxxs-strong-11);
-  line-height: 18px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.segment_cold {
-  background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 18%, transparent);
-  color: var(--dsw-alias-label-secondary);
-}
-
-.segment_closed,
-.segment_completed,
-.segment_interrupted {
-  background: color-mix(in srgb, var(--dsw-alias-label-secondary) 12%, transparent);
-}
-
-.segment_running,
-.segment_waiting,
-.segment_provisioning {
-  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent);
-}
-
-.segment_errored {
-  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
-  color: var(--dsw-alias-state-error-primary);
-}
-
-.runDashboardMobile {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.runDashboardMobile .runDashboardRow {
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
-}
+/* ── Agent detail panel ────────────────────────────────────────────── */
 
 .runDashboardDetail {
   margin-top: 8px;
@@ -451,6 +823,7 @@
 .runDashboardDetailError button {
   flex: none;
   height: 24px;
+  padding: 0 8px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
   background: transparent;
@@ -491,11 +864,19 @@
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 640px) {
-  .runDashboardFilters {
-    grid-template-columns: 1fr 1fr;
+/* A touch device has no hover to reveal anything with, and its taps need
+   room: keep every control at a comfortable size there. */
+@media (hover: none) {
+  .runDashboardActionButton {
+    height: 28px;
+    padding: 0 10px;
+  }
+
+  .runDashboardFilterSummary {
+    height: 28px;
   }
 }
+
 
 /* ── Background-job section (below the topology tree) ────────────────── */
 

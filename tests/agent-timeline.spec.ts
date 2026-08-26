@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildTimelineDisplay,
+  countActiveFilters,
   filterTimelineDisplay,
   formatAgentState,
   normalizeLongRunningMinutes,
@@ -226,5 +227,17 @@ describe('agent timeline client projection', () => {
     expect(filtered.rows.find(row => row.id === 'match')?.contextOnly).toBe(false)
     expect(filtered.rows.find(row => row.id === 'parent')?.longRunning).toBe(false)
     expect(filtered.rows.find(row => row.id === 'match')?.longRunning).toBe(true)
+  })
+})
+
+describe('countActiveFilters', () => {
+  it('counts only the filters that actually narrow the tree', () => {
+    expect(countActiveFilters({})).toBe(0)
+    expect(countActiveFilters({ state: 'all', model: '', path: '  ', text: '', longRunningOnly: false })).toBe(0)
+    expect(countActiveFilters({ state: 'running' })).toBe(1)
+    expect(countActiveFilters({ longRunningOnly: true })).toBe(1)
+    expect(countActiveFilters({ state: 'running', model: 'gpt', path: '/root', text: 'x', longRunningOnly: true })).toBe(5)
+    // Whitespace-only input is not a filter the user can see the effect of.
+    expect(countActiveFilters({ model: '   ', text: ' needle ' })).toBe(1)
   })
 })
