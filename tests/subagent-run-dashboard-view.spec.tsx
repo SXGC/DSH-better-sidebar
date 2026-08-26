@@ -345,6 +345,17 @@ describe('Run Dashboard view', () => {
 
   it('renders the mobile fallback list with the same row actions but without the shared gantt area', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true })
+    fetchQueue = [{
+      ...baseTimeline,
+      agents: baseTimeline.agents.map(agent => ({
+        ...agent,
+        state: { residency: 'live', turn: { kind: 'running' } },
+        statePoints: [
+          ...agent.statePoints,
+          { seq: 5, time: 7_000, transition: 'turn-started', state: { residency: 'live', turn: { kind: 'running' } } },
+        ],
+      })),
+    }]
     const snapshot = baseSnapshot()
     snapshot.jobsBySession = {
       root: [
@@ -390,7 +401,20 @@ describe('Run Dashboard view', () => {
     expect(container.textContent).toContain('build <strong>needle</strong>')
 
     const interrupt = container.querySelector('button[aria-label="中断 worker"]') as HTMLButtonElement
-    expect(interrupt.disabled).toBe(true)
+    expect(interrupt.disabled).toBe(false)
+    await act(async () => { interrupt.click() })
+    expect(interruptSubagent).toHaveBeenCalledWith({
+      parentSessionId: 'root',
+      childSessionId: 'child',
+      mode: 'continuable',
+    })
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="定位 owner Root task"]') as HTMLButtonElement).click()
+    })
+    const rootRow = container.querySelector('[data-run-dashboard-row-id="root"]') as HTMLElement
+    expect(rootRow.dataset.ownerHighlighted).toBe('true')
+    expect(scrollIntoViewTargets).toContain(rootRow)
     unmount()
   })
 

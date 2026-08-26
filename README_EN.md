@@ -45,6 +45,8 @@
 
 > ⚠️ **Formal npm delivery is blocked on the DSH baseline**: the Run Dashboard depends on public session / subagent APIs that include DSH `5cf09d3a0a`. Before npm release, every `@deepseek-ai/*` dependency and the mount CI lane must move to the first formal DSH release that contains that commit; this change does not add a `0.1.0-rc.8` or `0.1.1-rc.2` fallback.
 
+For pre-release integration against the current DSH master, run `DSH_SOURCE_REPO=/path/to/deepseek-harness pnpm test:mount`. The mount script verifies baseline ancestry and starts the checkout's complete workspace package closure through its `pnpm dsh` source resolver; this development evidence does not unblock npm delivery.
+
 **✨ New features**
 
 - 📈 **"Background Tasks" becomes "Run Dashboard"**: the built-in tab id stays `subagent`, but the page now shows the current root session and every native subagent. Desktop uses a frozen left column plus a horizontal Gantt timeline; narrow screens degrade to a tree list while keeping status, path, model, details, chat navigation, and valid agent controls.

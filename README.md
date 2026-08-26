@@ -46,6 +46,8 @@
 
 > ⚠️ **npm 正式交付基线阻塞**：运行看板依赖包含 DSH `5cf09d3a0a` 的公开会话 / 子代理接口。发布到 npm 前，所有 `@deepseek-ai/*` 依赖和 mount CI 必须切到包含该提交的首个正式发布版本；本变更不提供 `0.1.0-rc.8` 或 `0.1.1-rc.2` 兼容回退。
 
+发布前若用当前 DSH master 做真实挂载验证，请运行 `DSH_SOURCE_REPO=/path/to/deepseek-harness pnpm test:mount`。挂载脚本会验证基线提交，并通过该仓库的 `pnpm dsh` source resolver 启动完整 workspace 包闭包；该开发态证据不解除 npm 发布阻塞。
+
 **✨ 新功能**
 
 - 📈 **“任务管理”升级为“运行看板”**：内置 tab id 仍为 `subagent`，但页面显示当前根会话及全部原生子代理；桌面端为冻结左列 + 横向甘特图区，窄屏降级为树形列表，仍保留状态、path、模型、详情、聊天导航和有效代理控制。

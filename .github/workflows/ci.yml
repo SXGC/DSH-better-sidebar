@@ -63,6 +63,7 @@ jobs:
     # into the DSH composition (same guard DSH's own CI uses).
     env:
       DSH_TELEMETRY_DISABLED: '1'
+      DSH_CLI_SPEC: ${{ vars.DSH_CLI_SPEC }}
     steps:
       - uses: actions/checkout@v7
 

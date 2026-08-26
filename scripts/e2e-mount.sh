@@ -15,6 +15,9 @@
 # 环境变量（均可省略）：
 #   DSH_CMD        dsh 命令；缺省 PATH 上的 `dsh`。必须是包含
 #                  5cf09d3a0a 的正式 DSH 版本；本脚本不回退 rc 包。
+#   DSH_SOURCE_REPO
+#                  可选的 DSH master 仓库。设置后通过该仓库的 `pnpm dsh`
+#                  启动 source resolver，且 HEAD 必须包含 5cf09d3a0a。
 #   TARBALL        插件 tarball；缺省仓库根 dsh-better-sidebar-*.tgz（须已 pack）
 #   PORT           固定端口（默认 0 = OS 分配，从日志解析 URL）
 #   DSH_HOME_BASE  覆盖 scratch 根目录（默认系统临时目录）。脚本始终在其下
@@ -30,6 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 DSH_CMD="${DSH_CMD:-dsh}"
+DSH_SOURCE_REPO="${DSH_SOURCE_REPO:-}"
 PORT="${PORT:-0}"
 TARBALL="${TARBALL:-}"
 REQUIRED_DSH_BASELINE="5cf09d3a0a"
@@ -43,16 +47,24 @@ die()  { printf '\033[31m[e2e-mount]\033[0m %s\n' "$*" >&2; exit 1; }
 command -v node >/dev/null 2>&1 || die "未找到 node（DSH 运行需要 Node.js >= 20）"
 command -v pnpm >/dev/null 2>&1 || die "未找到 pnpm（dsh plugin 转发给 pnpm）"
 
-# dsh CLI 解析：真实挂载验收必须显式使用调用方安装的正式 DSH。
-if ! command -v "$DSH_CMD" >/dev/null 2>&1; then
-  die "未找到 $DSH_CMD；请先安装包含 ${REQUIRED_DSH_BASELINE} 的正式 DSH CLI，或用 DSH_CMD 指定。不会回退到 rc 包。"
+if [ -n "$DSH_SOURCE_REPO" ]; then
+  [ -d "$DSH_SOURCE_REPO/.git" ] || die "DSH_SOURCE_REPO 不是 Git 仓库：$DSH_SOURCE_REPO"
+  DSH_SOURCE_REPO="$(cd "$DSH_SOURCE_REPO" && pwd)"
+  git -C "$DSH_SOURCE_REPO" merge-base --is-ancestor "$REQUIRED_DSH_BASELINE" HEAD \
+    || die "DSH_SOURCE_REPO HEAD 不包含 ${REQUIRED_DSH_BASELINE}。"
+  DSH_RUN=(pnpm --dir "$DSH_SOURCE_REPO" dsh)
+  DSH_VERSION="$("${DSH_RUN[@]}" --version 2>/dev/null | tail -1 || true)"
+  say "dsh CLI: ${DSH_VERSION:-unknown}（已从 source repo 验证 ${REQUIRED_DSH_BASELINE}）"
+else
+  command -v "$DSH_CMD" >/dev/null 2>&1 \
+    || die "未找到 $DSH_CMD；请安装包含 ${REQUIRED_DSH_BASELINE} 的正式 DSH CLI，或设置 DSH_SOURCE_REPO。"
+  DSH_RUN=("$DSH_CMD")
+  DSH_VERSION="$("${DSH_RUN[@]}" --version 2>/dev/null || true)"
+  if [ -z "$DSH_VERSION" ] || printf '%s\n' "$DSH_VERSION" | grep -q -- '-'; then
+    die "当前 DSH CLI 不是正式版本（${DSH_VERSION:-unknown}）。运行看板真实挂载验收要求包含 ${REQUIRED_DSH_BASELINE} 的首个正式 DSH 版本；开发态 master 请显式设置 DSH_SOURCE_REPO。"
+  fi
+  say "dsh CLI: ${DSH_VERSION}（正式版本；调用方需钉住首个包含 ${REQUIRED_DSH_BASELINE} 的版本）"
 fi
-
-DSH_VERSION="$($DSH_CMD --version 2>/dev/null || true)"
-if printf '%s\n' "$DSH_VERSION" | grep -Eq '0\.1\.0-rc\.8|0\.1\.1-rc\.2|-rc\.'; then
-  die "当前 DSH CLI 版本为预发布版本（${DSH_VERSION:-unknown}）。运行看板真实挂载验收要求包含 ${REQUIRED_DSH_BASELINE} 的首个正式 DSH 版本，不支持 rc.8/rc.2 回退。"
-fi
-say "dsh CLI: ${DSH_VERSION:-unknown}（需由调用方确认包含 ${REQUIRED_DSH_BASELINE}）"
 
 # tarball 解析
 if [ -z "$TARBALL" ]; then
@@ -127,7 +139,7 @@ EOF
 
 # 步骤 2：官方 CLI 安装 tarball + bundle 协调（真实挂载路径）
 say "执行 dsh plugin --profile web add file:$TARBALL ..."
-$DSH_CMD plugin --profile web add "file:$TARBALL"
+"${DSH_RUN[@]}" plugin --profile web add "file:$TARBALL"
 
 # 步骤 3：校验挂载生效（dsh.profile.bundles 含 dsh-better-sidebar）
 if ! node -e '
@@ -144,7 +156,7 @@ say "挂载已注册：dsh.profile.bundles 包含 dsh-better-sidebar"
 
 # 步骤 4：启动 dsh web（--port 0 = OS 分配，避免端口冲突；keyless 可起）
 say "启动 dsh web（port=${PORT}）..."
-$DSH_CMD web --port "$PORT" > "$WEB_LOG" 2>&1 &
+"${DSH_RUN[@]}" web --port "$PORT" > "$WEB_LOG" 2>&1 &
 SERVER_PID=$!
 
 URL=""

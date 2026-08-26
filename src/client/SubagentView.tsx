@@ -1037,9 +1037,11 @@ export function SubagentView(props: {
   }, [])
 
   useEffect(() => () => { detailRequestRef.current?.abort() }, [])
-  useEffect(() => () => {
+  const cancelZoomFrame = useCallback((): void => {
     if (zoomFrameRef.current !== undefined) window.cancelAnimationFrame(zoomFrameRef.current)
+    zoomFrameRef.current = undefined
   }, [])
+  useEffect(() => () => { cancelZoomFrame() }, [cancelZoomFrame])
 
   const toggleAgentDetail = useCallback((agentSessionId: string): void => {
     if (detailState.kind !== 'idle' && detailState.agentSessionId === agentSessionId) {
@@ -1175,33 +1177,30 @@ export function SubagentView(props: {
     const nextZoom = Math.min(8, Math.max(0.25, zoom * factor))
     setZoom(nextZoom)
     if (scroller !== null) {
-      if (zoomFrameRef.current !== undefined) window.cancelAnimationFrame(zoomFrameRef.current)
+      cancelZoomFrame()
       zoomFrameRef.current = window.requestAnimationFrame(() => {
         zoomFrameRef.current = undefined
         scroller.scrollLeft = Math.max(0, ratio * timelineWidth(nextZoom) - anchor)
       })
     }
-  }, [zoom])
+  }, [cancelZoomFrame, zoom])
   const zoomIn = useCallback((): void => { zoomBy(TIMELINE_ZOOM_FACTOR) }, [zoomBy])
   const zoomOut = useCallback((): void => { zoomBy(1 / TIMELINE_ZOOM_FACTOR) }, [zoomBy])
   const fitAll = useCallback((): void => {
-    if (zoomFrameRef.current !== undefined) window.cancelAnimationFrame(zoomFrameRef.current)
-    zoomFrameRef.current = undefined
+    cancelZoomFrame()
     setZoom(1)
     scrollerRef.current?.scrollTo({ left: 0 })
-  }, [])
+  }, [cancelZoomFrame])
   const panRight = useCallback((): void => {
-    if (zoomFrameRef.current !== undefined) window.cancelAnimationFrame(zoomFrameRef.current)
-    zoomFrameRef.current = undefined
+    cancelZoomFrame()
     const scroller = scrollerRef.current
     if (scroller !== null) scroller.scrollLeft += TIMELINE_PAN_STEP
-  }, [])
+  }, [cancelZoomFrame])
   const scrollNow = useCallback((): void => {
-    if (zoomFrameRef.current !== undefined) window.cancelAnimationFrame(zoomFrameRef.current)
-    zoomFrameRef.current = undefined
+    cancelZoomFrame()
     const scroller = scrollerRef.current
     if (scroller !== null) scroller.scrollLeft = timelineWidth(zoom)
-  }, [zoom])
+  }, [cancelZoomFrame, zoom])
 
   const locateJobOwner = useCallback((ownerSessionId: string): void => {
     setLocatedOwnerId(ownerSessionId)
