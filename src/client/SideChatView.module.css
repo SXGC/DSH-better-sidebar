@@ -3,11 +3,9 @@
  * on --dsw-specific-bubble, full-width assistant markdown, a capsule
  * composer card on --dsw-specific-input-major with a circular accent
  * send/stop button. Tool calls, thinking and context injections share one
- * collapsible-line chrome (no cards); shimmer is reserved for generating
- * states (running status line, streaming rows, the creating hero). Motion
- * is crossfade-only (≤200ms entrances, no springs); reduced-motion disables
- * every loop. All values consume DSW tokens (fallbacks point at older alias
- * tokens for rc-era hosts). */
+ * collapsible-line chrome; shimmer is reserved for generating states
+ * (running status line, streaming rows, the creating hero). Ordinary
+ * transcript rows have no entrance motion. */
 .sidechat {
   flex: 1;
   min-height: 0;
@@ -149,19 +147,14 @@
   gap: 10px;
 }
 
-/* Rows crossfade in on append (keys are stable, so only NEW rows play). */
-.sidechatScroll > * {
-  animation: sidechatRowIn 180ms ease-out;
-}
-
 /* User message: right-aligned bubble, same surface as the main pane. */
 .sidechatUser {
   align-self: flex-end;
-  max-width: 88%;
-  padding: 8px 14px;
-  border-radius: 18px;
-  background: var(--dsw-specific-bubble, var(--dsw-alias-bg-base));
-  font: var(--dsw-font-s-14);
+  max-width: min(525px, 82%);
+  padding: 10px 16px;
+  border-radius: 22px;
+  background: var(--dsw-specific-bubble);
+  font: var(--dsw-font-markdown-small);
   color: var(--dsw-alias-label-primary);
   overflow-wrap: anywhere;
 }
@@ -169,7 +162,6 @@
 /* Assistant message: full-width narration, no bubble — the main pane way. */
 .sidechatAssistant {
   align-self: stretch;
-  font: var(--dsw-font-s-14);
   color: var(--dsw-alias-label-primary);
   overflow-wrap: anywhere;
 }
@@ -184,41 +176,9 @@
 }
 
 .sidechatRowLine {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 1px 0;
-  font: var(--dsw-font-xxs-12);
+  position: relative;
+  overflow: hidden;
   color: var(--dsw-alias-label-tertiary);
-}
-
-.sidechatRowSummary {
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-}
-
-.sidechatRowSummary::-webkit-details-marker {
-  display: none;
-}
-
-.sidechatRowSummary:hover {
-  color: var(--dsw-alias-label-secondary);
-}
-
-.sidechatRowStatic {
-  cursor: default;
-}
-
-.sidechatRowChevron {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  transition: transform 100ms ease-out;
-}
-
-.sidechatRow[open] .sidechatRowChevron {
-  transform: rotate(90deg);
 }
 
 .sidechatRowLabel {
@@ -249,35 +209,22 @@
   color: var(--dsw-alias-danger);
 }
 
-.sidechatRowBody {
-  margin: 2px 0 4px 7px;
-  padding: 2px 0 2px 10px;
-  border-left: 1px solid var(--dsw-alias-hairline);
-}
-
-.sidechatRowProse {
-  font: var(--dsw-font-xxs-12);
+.sidechatThinkBody {
+  padding: 4px 0 4px 22px;
   color: var(--dsw-alias-label-tertiary);
+  font-size: 14px;
+  line-height: 24px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 240px;
   overflow-y: auto;
 }
 
-.sidechatRowCode {
-  margin: 0;
-  padding: 4px 0;
-  font: var(--dsw-font-xxs-12);
-  font-family: var(--dsw-font-mono);
-  color: var(--dsw-alias-label-secondary);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.sidechatCodeBody {
+  min-width: 0;
+  margin: 4px 0 4px 22px;
   max-height: 220px;
   overflow-y: auto;
-}
-
-.sidechatRowCode + .sidechatRowCode {
-  border-top: 1px solid var(--dsw-alias-hairline);
 }
 
 /* Shimmer sweep text: generating (streaming row labels, creating hero). */
@@ -328,10 +275,10 @@
   gap: 4px;
   margin: 0 8px 8px;
   padding: 8px 8px 6px 14px;
-  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin, var(--dsw-alias-hairline));
-  border-radius: 16px;
-  background: var(--dsw-specific-input-major, var(--dsw-alias-bg-base));
-  box-shadow: var(--dsw-shadow-lv2, none);
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 22px;
+  background: var(--dsw-specific-input-major);
+  box-shadow: var(--dsw-shadow-lv2);
 }
 
 .sidechatComposerInput {
@@ -341,7 +288,7 @@
   border: none;
   background: transparent;
   color: var(--dsw-alias-label-primary);
-  font: var(--dsw-font-s-14);
+  font: var(--dsw-font-markdown-small);
   line-height: 22px;
   outline: none;
   resize: none;
@@ -349,7 +296,7 @@
 }
 
 .sidechatComposerInput::placeholder {
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--dsw-alias-label-caption);
 }
 
 .sidechatComposerBar {
@@ -383,8 +330,6 @@
   background: var(--dsw-alias-button-info-fill, var(--dsw-alias-accent));
   color: var(--dsw-alias-button-info-label, var(--dsw-alias-accent-ink, #fff));
   cursor: pointer;
-  /* send ⇄ stop swap: keyed remount plays this, hover only fades. */
-  animation: sidechatBtnIn 120ms ease-out;
   transition: opacity 100ms ease-out;
 }
 
@@ -397,20 +342,10 @@
   cursor: default;
 }
 
-/* ── motion vocabulary (crossfade only, ≤200ms; loops reduced-motion off) */
-@keyframes sidechatRowIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
+/* ── motion vocabulary (creation/running only; loops reduced-motion off) */
 @keyframes sidechatFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
-}
-
-@keyframes sidechatBtnIn {
-  from { opacity: 0; transform: scale(0.85); }
-  to { opacity: 1; transform: scale(1); }
 }
 
 @keyframes sidechatSweep {
@@ -419,10 +354,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sidechatScroll > *,
   .sidechatHero,
-  .sidechatStatus,
-  .sidechatSendBtn {
+  .sidechatStatus {
     animation: none;
   }
   .sidechatStatusText,
@@ -430,8 +363,5 @@
     animation: none;
     background-image: none;
     color: var(--dsw-alias-label-tertiary);
-  }
-  .sidechatRowChevron {
-    transition: none;
   }
 }

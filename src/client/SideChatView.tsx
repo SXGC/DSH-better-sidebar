@@ -20,16 +20,21 @@
  * at session/end-seed, boundary row dropped, chunk streaming accumulated)
  * — see sidechat-transcript.ts.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ComponentType } from 'react'
 import { useSyncExternalStore } from 'react'
 import clsx from 'clsx'
 import {
-  IconChevronRightOutline14,
+  CodeBlock,
+  DisclosureRow,
+  IconApiOutline14,
+  IconBrowseOutline16,
   IconNewChatOutline16,
   IconPlusOutline16,
   IconSendOutline16,
   IconStopFill16,
+  IconThinkOutline14,
   MarkdownText,
+  MessageText,
   Menu,
   StateDot,
   type MenuEntry,
@@ -50,6 +55,16 @@ import { t } from './locales.ts'
 import type { SessionScope } from './api.ts'
 import type { SidebarTab } from './state.ts'
 import css from './SideChatView.module.css'
+
+/** SCI-02's public prop is newer than this ticket's pinned rc.1 dev types;
+ *  SCI-07 owns the dependency bump. Keep the adapter on the package-root
+ *  component while expressing the approved forward-compatible contract. */
+const ConversationMarkdownText = MarkdownText as ComponentType<
+  ComponentProps<typeof MarkdownText> & { density: 'conversation' }
+>
+const ConversationCodeBlock = CodeBlock as ComponentType<
+  ComponentProps<typeof CodeBlock> & { density: 'conversation' }
+>
 
 /** Tail-page size for one transcript poll (events per page). Small on
  *  purpose: streaming polls ride the tail and merge by seq. */
@@ -131,52 +146,39 @@ function threadDisplayTitle(title: string): string {
  * hairline thread. Rows with nothing to reveal render as a static line.
  */
 function CollapsibleRow(props: {
+  icon: React.ReactNode
   label: string
   meta?: string
   mono?: boolean
   streaming?: boolean
   failed?: boolean
+  bodyClassName?: string
   children?: React.ReactNode
 }): React.ReactNode {
-  const label = (
-    <span
-      className={clsx(
+  const [open, setOpen] = useState(false)
+  const meta = props.meta !== undefined && props.meta !== ''
+    ? <span className={css.sidechatRowMeta}>{props.meta}</span>
+    : null
+  return (
+    <DisclosureRow
+      className={css.sidechatRow}
+      rowClassName={clsx(css.sidechatRowLine, props.failed === true && css.sidechatRowFailed)}
+      titleClassName={clsx(
         css.sidechatRowLabel,
         props.mono === true && css.sidechatRowMono,
         props.streaming === true && css.sidechatShimmerText,
       )}
+      icon={props.icon}
+      title={props.label}
+      open={open}
+      expandable={props.children !== undefined}
+      expandOnRowClick
+      keepContentWhenOpen
+      onToggle={() => { setOpen(value => !value) }}
+      collapsedContent={meta}
     >
-      {props.label}
-    </span>
-  )
-  const meta = props.meta !== undefined && props.meta !== ''
-    ? <span className={css.sidechatRowMeta}>{props.meta}</span>
-    : null
-  if (props.children === undefined) {
-    return (
-      <div className={clsx(css.sidechatRowLine, css.sidechatRowStatic, props.failed === true && css.sidechatRowFailed)}>
-        {label}
-        {meta}
-      </div>
-    )
-  }
-  return (
-    <details className={css.sidechatRow}>
-      <summary
-        className={clsx(
-          css.sidechatRowLine,
-          css.sidechatRowSummary,
-          props.failed === true && css.sidechatRowFailed,
-        )}
-      >
-        <span className={css.sidechatRowChevron}>
-          <IconChevronRightOutline14 size={12} />
-        </span>
-        {label}
-        {meta}
-      </summary>
-      <div className={css.sidechatRowBody}>{props.children}</div>
-    </details>
+      {props.children === undefined ? null : <div className={props.bodyClassName}>{props.children}</div>}
+    </DisclosureRow>
   )
 }
 
@@ -186,46 +188,75 @@ function renderRow(row: SidechatTranscriptRow, labels: RowLabels): React.ReactNo
     case 'user':
       return (
         <div key={`${row.kind}:${row.seq}`} className={css.sidechatUser}>
-          <MarkdownText text={row.text} codeLabels={labels} />
+          <MessageText text={row.text} />
         </div>
       )
     case 'assistant':
       return (
         <div key={`${row.kind}:${row.seq}`} className={css.sidechatAssistant}>
-          <MarkdownText text={row.text} codeLabels={labels} />
+          <ConversationMarkdownText text={row.text} codeLabels={labels} density="conversation" />
         </div>
       )
     case 'reasoning':
       return (
         <CollapsibleRow
           key={`${row.kind}:${row.seq}`}
+          icon={<IconThinkOutline14 size={14} />}
           label={labels.thinkLabel}
           streaming={!row.settled}
+          bodyClassName={css.sidechatThinkBody}
         >
-          <div className={css.sidechatRowProse}>{row.text}</div>
+          {row.text}
         </CollapsibleRow>
       )
     case 'injection':
       return (
-        <CollapsibleRow key={`${row.kind}:${row.seq}`} label={labels.injectionLabel}>
-          <div className={css.sidechatRowProse}>{row.text}</div>
+        <CollapsibleRow
+          key={`${row.kind}:${row.seq}`}
+          icon={<IconBrowseOutline16 size={14} />}
+          label={labels.injectionLabel}
+          bodyClassName={css.sidechatCodeBody}
+        >
+          <ConversationCodeBlock
+            code={row.text}
+            copyLabel={labels.copyLabel}
+            copiedLabel={labels.copiedLabel}
+            density="conversation"
+          />
         </CollapsibleRow>
       )
     case 'tool': {
       const body = (
         <>
-          {row.args !== undefined && <pre className={css.sidechatRowCode}>{row.args}</pre>}
-          {row.resultText !== undefined && <pre className={css.sidechatRowCode}>{row.resultText}</pre>}
+          {row.args !== undefined && (
+            <ConversationCodeBlock
+              code={row.args}
+              lang="json"
+              copyLabel={labels.copyLabel}
+              copiedLabel={labels.copiedLabel}
+              density="conversation"
+            />
+          )}
+          {row.resultText !== undefined && (
+            <ConversationCodeBlock
+              code={row.resultText}
+              copyLabel={labels.copyLabel}
+              copiedLabel={labels.copiedLabel}
+              density="conversation"
+            />
+          )}
         </>
       )
       return (
         <CollapsibleRow
           key={`${row.kind}:${row.seq}`}
+          icon={<IconApiOutline14 size={14} />}
           label={row.name}
           meta={toolArgsSummary(row.args)}
           mono
           streaming={row.executing === true}
           failed={row.failed}
+          bodyClassName={css.sidechatCodeBody}
           {...(row.args === undefined && row.resultText === undefined ? {} : { children: body })}
         />
       )
@@ -516,7 +547,7 @@ export function SideChatView(props: {
   //    until the thread lands; legacy persisted tabs offer a manual start) ──
   if (threadId === undefined) {
     return (
-      <div className={css.sidechat}>
+      <div className={css.sidechat} data-sidechat-surface>
         <div className={css.sidechatHero}>
           <IconNewChatOutline16 />
           <div
@@ -544,10 +575,12 @@ export function SideChatView(props: {
   }
 
   return (
-    <div className={css.sidechat}>
+    <div className={css.sidechat} data-sidechat-surface>
       <div className={css.sidechatDetailHeader}>
         {running && <StateDot state="ongoing" size={8} className={css.sidechatHeaderDot} />}
-        {agentBadge !== '' && <span className={css.sidechatAgentBadge}>{agentBadge}</span>}
+        {agentBadge !== '' && (
+          <span className={css.sidechatAgentBadge} data-sidechat-nondeterministic>{agentBadge}</span>
+        )}
         <span className={css.sidechatHeaderSpacer} />
         <Menu
           open={menuOpen}
@@ -584,7 +617,7 @@ export function SideChatView(props: {
         && <div className={css.sidechatHint}>{t('sideChatPendingDrop')}</div>}
       {saved && <div className={css.sidechatHint}>{t('sideChatSaved')}</div>}
       {error !== null && <div className={css.sidechatError}>{t('sideChatError', { message: error })}</div>}
-      <div ref={scrollRef} className={css.sidechatScroll}>
+      <div ref={scrollRef} className={css.sidechatScroll} data-sidechat-transcript>
         {rows.map(row => renderRow(row, rowLabels))}
       </div>
       {running && (
@@ -593,7 +626,7 @@ export function SideChatView(props: {
           <span className={css.sidechatStatusText}>{t('sideChatThinking')}</span>
         </div>
       )}
-      <div className={css.sidechatComposer}>
+      <div className={css.sidechatComposer} data-sidechat-composer>
         <textarea
           ref={composerRef}
           className={css.sidechatComposerInput}

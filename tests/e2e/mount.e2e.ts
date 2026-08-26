@@ -64,6 +64,110 @@ const CRASH_STRIP_PATTERNS = [/^dsh-better-sidebar:/, /^\[dsh-better-sidebar\]/]
 /** Built-in tab titles the sweep drives (en-US copy; follows DSH locale). */
 const BUILTIN_TABS = ['Files', 'Source Control', 'Tasks', 'Side Chat (beta)', 'Terminal', 'Browser']
 
+/** Deterministic Side Chat transcript used only by the visual parity fixture. */
+const SIDECHAT_VISUAL_EVENTS = [
+  { event: { type: 'session/end-seed', seq: 0, time: 0, data: {} } },
+  {
+    event: {
+      type: 'user/message',
+      seq: 1,
+      time: 1_000,
+      surfaceOp: 'append',
+      data: {
+        content: [{ type: 'text', text: '# Keep **Markdown** literal' }],
+        source: { kind: 'user' },
+      },
+    },
+  },
+  { event: { type: 'turn/start', seq: 2, time: 2_000, data: { turn: 1 } } },
+  { event: { type: 'step/start', seq: 3, time: 3_000, data: { turn: 1, step: 1 } } },
+  {
+    event: {
+      type: 'assistant/message',
+      seq: 4,
+      time: 4_000,
+      surfaceOp: 'append',
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          content: [
+            { type: 'reasoning', text: 'Compare the shared conversation rhythm before answering.' },
+            {
+              type: 'text',
+              text: [
+                '## Shared presentation',
+                '',
+                'Assistant Markdown keeps a compact paragraph rhythm.',
+                '',
+                '- one list item',
+                '- another list item',
+                '',
+                '| Surface | Owner |',
+                '| --- | --- |',
+                '| Markdown | DSH |',
+                '| Layout | Side Chat |',
+                '',
+                '```ts',
+                'const density = "conversation"',
+                '```',
+              ].join('\n'),
+            },
+          ],
+        },
+      },
+    },
+  },
+  {
+    event: {
+      type: 'user/message',
+      seq: 5,
+      time: 5_000,
+      surfaceOp: 'append',
+      data: {
+        content: [{ type: 'text', text: 'Pinned context for the visual fixture.' }],
+        source: { kind: 'plugin', plugin: 'sidechat-visual-fixture' },
+      },
+    },
+  },
+  {
+    event: {
+      type: 'tool/call',
+      seq: 6,
+      time: 6_000,
+      data: {
+        turn: 1,
+        step: 1,
+        callId: 'fixture-call',
+        name: 'read',
+        arguments: '{"path":"src/client/SideChatView.tsx"}',
+      },
+    },
+  },
+  {
+    event: {
+      type: 'tool/result',
+      seq: 7,
+      time: 7_000,
+      surfaceOp: 'append',
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          source: { kind: 'tool', callId: 'fixture-call' },
+          content: [{
+            type: 'tool-result',
+            toolCallId: 'fixture-call',
+            isError: false,
+            content: [{ type: 'text', text: 'export function SideChatView() { /* fixture */ }' }],
+          }],
+        },
+      },
+    },
+  },
+  { event: { type: 'turn/end', seq: 8, time: 8_000, data: { turn: 1, reason: { kind: 'completed' } } } },
+]
+
 let api: APIRequestContext
 /** The seeded session id (captured by seedSession; the Side Chat smoke's parent). */
 let seededSessionId: string
@@ -554,6 +658,128 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
 
   // Final screenshot: the rendered panel with a session is the lane's proof.
   await page.screenshot({ path: 'test-results/mount-final.png' })
+})
+
+test('Side Chat visual fixture matches shared conversation presentation at 320px and 420px', async ({ page }) => {
+  test.setTimeout(240_000)
+  const pageErrors: string[] = []
+  const consoleErrors: string[] = []
+  page.on('pageerror', error => pageErrors.push(String(error)))
+  page.on('console', message => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+
+  await page.route('**/api/session.history', async (route) => {
+    const body = route.request().postDataJSON() as {
+      rpcId?: string
+      payload?: { sessionId?: string }
+    }
+    if (body.payload?.sessionId === seededSessionId) {
+      await route.continue()
+      return
+    }
+    await route.fulfill({
+      json: {
+        type: 'server-response',
+        rpcId: body.rpcId,
+        result: { ok: true, value: { events: SIDECHAT_VISUAL_EVENTS, hasMore: false } },
+      },
+    })
+  })
+
+  const setDockedWidth = async (width: 320 | 420): Promise<void> => {
+    const region = page.locator('[data-layout-region="right-sidebar"]')
+    const handle = page.locator('[data-side="right-sidebar"]')
+    const currentWidth = await region.evaluate(element => element.getBoundingClientRect().width)
+    const box = await handle.boundingBox()
+    expect(box, 'official right-sidebar resize handle').not.toBeNull()
+    const x = box!.x + box!.width / 2
+    const y = box!.y + Math.min(120, box!.height / 2)
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x + currentWidth - width, y, { steps: 8 })
+    await page.mouse.up()
+    await expect.poll(
+      () => region.evaluate(element => Math.round(element.getBoundingClientRect().width)),
+      { timeout: 30_000 },
+    ).toBe(width)
+  }
+
+  for (const theme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' })
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('#root > *')).not.toHaveCount(0, { timeout: 90_000 })
+
+    try {
+      await expect
+        .poll(() => page.getByRole('button', { name: /^(Continue|Configure later)$/ }).count(), { timeout: 60_000 })
+        .toBeGreaterThan(0)
+    } catch {
+      console.warn('[e2e] no onboarding takeover appeared; proceeding without dismissal')
+    }
+    for (let round = 0; round < 8; round++) {
+      let dismissed = false
+      for (const name of ['Continue', 'Configure later']) {
+        const button = page.getByRole('button', { name, exact: true }).first()
+        if ((await button.count()) === 0) continue
+        try {
+          await button.click({ timeout: 4_000 })
+          dismissed = true
+          await page.waitForTimeout(500)
+        } catch {
+          // Another onboarding layer is above this one; retry next round.
+        }
+      }
+      if (!dismissed) break
+    }
+
+    const sidebar = page.locator('[data-layout-region="right-sidebar"] [data-dsh-better-sidebar]')
+    await expect(sidebar).toBeAttached({ timeout: 90_000 })
+    const layoutActions = page.locator('[data-layout-actions]')
+    const layoutAction = layoutActions.getByRole('button', { name: /^(Expand|Collapse) sidebar$/ })
+    await expect(layoutAction, 'Host-owned sidebar layout action').toHaveCount(1)
+    const expand = layoutActions.getByRole('button', { name: 'Expand sidebar', exact: true })
+    if ((await expand.count()) === 1) await expand.click()
+    await expect(layoutActions.getByRole('button', { name: 'Collapse sidebar', exact: true })).toHaveCount(1)
+    await expect(page.locator('[data-side="right-sidebar"]')).toHaveCount(1)
+
+    const newTab = sidebar.getByRole('button', { name: 'New tab', exact: true }).first()
+    await newTab.click()
+    await page.getByRole('menuitem', { name: 'Side Chat (beta)', exact: true }).first().click()
+
+    const surface = sidebar.locator('[data-sidechat-surface]:visible')
+    await expect(surface).toBeVisible({ timeout: 30_000 })
+    await expect(surface.getByText('# Keep **Markdown** literal', { exact: true })).toBeVisible()
+    await expect(surface.getByText('Shared presentation', { exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('body[data-ds-dark-theme]')).toHaveCount(theme === 'dark' ? 1 : 0)
+
+    for (const name of [/^Thinking$/, /^Context injected$/, /^read/]) {
+      await surface.getByRole('button', { name }).click()
+    }
+    // Markdown root + fenced code + context code + tool code all expose the
+    // public conversation density at runtime. The paired-result branch is
+    // covered by the focused component test; this fixed fixture keeps one
+    // tool surface visible at both narrow widths.
+    await expect(surface.locator('[data-density="conversation"]')).toHaveCount(4)
+
+    await page.addStyleTag({ content: [
+      '*, *::before, *::after { animation: none !important; transition: none !important; }',
+      'textarea { caret-color: transparent !important; }',
+    ].join('\n') })
+
+    for (const width of [320, 420] as const) {
+      await setDockedWidth(width)
+      await expect(surface).toHaveScreenshot(`sidechat-${theme}-${width}.png`, {
+        animations: 'disabled',
+        caret: 'hide',
+        mask: [surface.locator('[data-sidechat-nondeterministic]')],
+        maxDiffPixelRatio: 0.01,
+      })
+    }
+  }
+
+  expect(consoleErrors, 'console errors during the Side Chat visual fixture').toEqual([])
+  expect(pageErrors, 'pageerrors during the Side Chat visual fixture').toEqual([])
 })
 
 test('conservative auto: URL stamps alone never modify the layout; plugin chrome carries the stable data attributes', async ({ page }) => {
