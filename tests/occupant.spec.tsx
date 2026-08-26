@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createElement } from 'react'
+import { createElement, useSyncExternalStore } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 import { apply } from '../src/client/index.tsx'
 import { api } from '../src/client/api.ts'
 import { createRightSidebarOwnerSource, Occupant } from '../src/client/Occupant.tsx'
-import { ToggleCluster } from '../src/client/ToggleCluster.tsx'
-import { createSidebarStore } from '../src/client/state.ts'
+import { BottomPanelLayoutAction, RightSidebarLayoutAction } from '../src/client/LayoutActions.tsx'
+import { OverlaySurface } from '../src/client/OverlaySurface.tsx'
+import { createSidebarStore, toggleBottomPanel } from '../src/client/state.ts'
+import { t } from '../src/client/locales.ts'
 import type { SidebarLayoutSnapshot } from '../src/context-types.ts'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -28,6 +30,13 @@ function snapshotSource<T>(initial: T) {
       for (const listener of listeners) listener()
     },
   }
+}
+
+function bindSnapshotSelector<T>(source: { getSnapshot(): T; subscribe(listener: () => void): () => void }) {
+  return <S,>(selector: (snapshot: T) => S): S => useSyncExternalStore(
+    source.subscribe.bind(source),
+    () => selector(source.getSnapshot()),
+  )
 }
 
 afterEach(() => {
@@ -76,59 +85,102 @@ describe('official right-sidebar occupant', () => {
     container.remove()
   })
 
-  it('keeps the official right toggle available and gates the bottom toggle on an open desktop column', () => {
+  it('keeps the host layout action available without a session and follows the real owner state', () => {
     const container = document.createElement('div')
     document.body.append(container)
     const root: Root = createRoot(container)
-    const store = createSidebarStore()
-    store.setSession('s1')
-    const layout = snapshotSource<SidebarLayoutSnapshot>({
-      mode: 'desktop',
-      mobileSurface: null,
-      detailsAvailable: false,
-      rightSidebarAvailable: true,
-    })
     const owner = createRightSidebarOwnerSource()
     const toggleRightSidebar = vi.fn()
-    const locale = snapshotSource({ active: 'en' })
 
     act(() => {
-      root.render(createElement(ToggleCluster, {
-        store,
-        layoutSnapshot: layout,
-        ownerSnapshot: owner,
-        localeSnapshot: locale,
+      root.render(createElement(RightSidebarLayoutAction, {
+        useRightSidebarOwner: bindSnapshotSelector(owner),
         toggleRightSidebar,
       }))
     })
     expect(container.querySelectorAll('button')).toHaveLength(1)
-    const cluster = container.querySelector<HTMLElement>('[data-dsh-better-sidebar-toggles]')
-    // Desktop collapsed: 68px clearance keeps the cluster left of the Session
-    // header's More trigger.
-    expect(cluster?.style.right).toBe('68px')
-    const rightToggle = container.querySelector<HTMLButtonElement>('button[aria-label="Expand sidebar"]')
+    const rightToggle = container.querySelector<HTMLButtonElement>(`button[aria-label="${t('expand')}"]`)
     expect(rightToggle).not.toBeNull()
+    expect(rightToggle?.getAttribute('aria-expanded')).toBe('false')
     act(() => { rightToggle?.click() })
     expect(toggleRightSidebar).toHaveBeenCalledOnce()
 
     act(() => { owner.publish({ collapsed: false, width: 360 }) })
-    expect(container.querySelectorAll('button')).toHaveLength(2)
-    expect(cluster?.style.right).toBe('428px')
-    const bottomToggle = container.querySelector<HTMLButtonElement>('button[aria-label="Expand bottom panel"]')
-    expect(bottomToggle).not.toBeNull()
-    act(() => { bottomToggle?.click() })
-    expect(store.getSnapshot().state?.bottomOpen).toBe(true)
+    const collapse = container.querySelector<HTMLButtonElement>(`button[aria-label="${t('collapse')}"]`)
+    expect(collapse).not.toBeNull()
+    expect(collapse?.getAttribute('aria-expanded')).toBe('true')
+
+    act(() => { root.unmount() })
+    container.remove()
+  })
+
+  it('shows the bottom action only for an enabled desktop workbench in an expanded column', () => {
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root: Root = createRoot(container)
+    const store = createSidebarStore()
+    store.setPrefs({ ...store.getPrefs(), bottomPanelEnabled: true })
+    store.setSession('s1')
+    const layout = snapshotSource<SidebarLayoutSnapshot>({
+      mode: 'desktop', mobileSurface: null, detailsAvailable: false, rightSidebarAvailable: true,
+    })
+    const owner = snapshotSource({ collapsed: false, width: 360 })
+    const render = () => createElement(BottomPanelLayoutAction, {
+      useLayout: bindSnapshotSelector(layout),
+      useRightSidebarOwner: bindSnapshotSelector(owner),
+      useSidebar: bindSnapshotSelector(store),
+      toggleBottomPanel: () => { store.reduce(toggleBottomPanel) },
+    })
 
     act(() => {
-      layout.publish({ ...layout.getSnapshot(), mode: 'mobile', mobileSurface: 'right-sidebar' })
+      root.render(render())
     })
-    expect(container.querySelectorAll('button')).toHaveLength(1)
-    expect(container.querySelector('button[aria-label="Collapse sidebar"]')).not.toBeNull()
+    const expand = container.querySelector<HTMLButtonElement>(`button[aria-label="${t('expandBottomPanel')}"]`)
+    expect(expand).not.toBeNull()
+    expect(expand?.getAttribute('aria-expanded')).toBe('false')
+    act(() => { expand?.click() })
+    expect(store.getSnapshot().state?.bottomOpen).toBe(true)
+    expect(container.querySelector(`button[aria-label="${t('collapseBottomPanel')}"]`)).not.toBeNull()
 
     act(() => { owner.publish({ collapsed: true, width: 0 }) })
-    expect(container.querySelectorAll('button')).toHaveLength(1)
-    expect(container.querySelector('button[aria-label="Expand sidebar"]')).not.toBeNull()
+    expect(container.querySelector('button')).toBeNull()
+    act(() => {
+      owner.publish({ collapsed: false, width: 360 })
+      layout.publish({ ...layout.getSnapshot(), mode: 'mobile', mobileSurface: 'right-sidebar' })
+    })
+    expect(container.querySelector('button')).toBeNull()
+    act(() => {
+      layout.publish({ ...layout.getSnapshot(), mode: 'desktop', mobileSurface: null })
+      store.setPrefs({ ...store.getPrefs(), bottomPanelEnabled: false })
+    })
+    expect(container.querySelector('button')).toBeNull()
 
+    act(() => { root.unmount() })
+    container.remove()
+  })
+
+  it('keeps shell.overlay dedicated to free windows with no legacy toggle cluster', () => {
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root: Root = createRoot(container)
+    const store = createSidebarStore()
+    const sessions = snapshotSource({ current: undefined, byId: {} })
+    const locale = snapshotSource({ active: 'en' })
+    const ctx = {
+      locale,
+      sessions: { list: sessions },
+      get: () => undefined,
+    }
+    act(() => {
+      root.render(createElement(OverlaySurface, {
+        ctx: ctx as never,
+        store,
+        revealDockedSurface: () => {},
+      }))
+    })
+    expect(container.querySelector('[data-dsh-better-sidebar-overlay]')).not.toBeNull()
+    expect(container.querySelector('[data-dsh-better-sidebar-toggles]')).toBeNull()
+    expect(container.querySelector('button')).toBeNull()
     act(() => { root.unmount() })
     container.remove()
   })
@@ -142,10 +194,32 @@ describe('official right-sidebar occupant', () => {
       externalDisable,
     }))
 
-    const registrations: Array<{ name: string; component: unknown }> = []
+    const registrations: Array<{
+      name: string
+      id?: string
+      order?: number
+      inject?: () => unknown
+      component: unknown
+    }> = []
+    const declared = new Set<string>()
+    const injections = new Map<string, Set<{ callback: () => () => void; dispose?: () => void }>>()
+    const declare = (name: string): void => {
+      declared.add(name)
+      for (const injection of injections.get(name) ?? []) {
+        injection.dispose ??= injection.callback()
+      }
+    }
+    const collapse = (name: string): void => {
+      declared.delete(name)
+      for (const injection of injections.get(name) ?? []) {
+        injection.dispose?.()
+        injection.dispose = undefined
+      }
+    }
     let remoteListener: (() => void) | undefined
     const applyLocaleSnapshot = { active: 'en' }
     const applySessionsSnapshot = { current: undefined, byId: {} }
+    const toggleRightSidebar = vi.fn()
     const ctx = {
       locale: {
         register: () => () => {},
@@ -161,7 +235,7 @@ describe('official right-sidebar occupant', () => {
         snapshot: { subscribe: () => () => {}, getSnapshot: () => ({ mode: 'desktop' }) },
         openRightSidebar: () => {},
         closeRightSidebar: () => {},
-        toggleRightSidebar: () => {},
+        toggleRightSidebar,
       },
       provide: () => {},
       effect: (callback: () => void | (() => void)) => {
@@ -172,33 +246,95 @@ describe('official right-sidebar occupant', () => {
         ? { $on: (_event: string, listener: () => void) => { remoteListener = listener; return () => {} } }
         : undefined,
       slots: {
-        register: (options: { name: string }, component: unknown) => {
-          const row = { name: options.name, component }
+        register: (options: { name: string; id?: string; order?: number; inject?: () => unknown }, component: unknown) => {
+          const row = { ...options, component }
           registrations.push(row)
           return () => {
             const index = registrations.indexOf(row)
             if (index >= 0) registrations.splice(index, 1)
           }
         },
-        inject: (_key: string, callback: () => () => void) => {
-          const dispose = callback()
-          return () => { dispose() }
+        inject: (key: string, callback: () => () => void) => {
+          const injection: { callback: () => () => void; dispose?: () => void } = { callback }
+          const rows = injections.get(key) ?? new Set()
+          rows.add(injection)
+          injections.set(key, rows)
+          if (declared.has(key)) injection.dispose = callback()
+          return () => {
+            injection.dispose?.()
+            rows.delete(injection)
+            if (rows.size === 0) injections.delete(key)
+          }
         },
       },
     }
 
     apply(ctx as never)
     await vi.waitFor(() => {
+      expect(injections.has('right-sidebar')).toBe(true)
+      expect(injections.has('shell.overlay')).toBe(true)
+      expect(injections.has('conversation.layout.actions')).toBe(true)
+    })
+    expect(registrations).toEqual([])
+
+    declare('right-sidebar')
+    declare('shell.overlay')
+    declare('conversation.layout.actions')
+    await vi.waitFor(() => {
       expect(registrations.some(row => row.name === 'right-sidebar')).toBe(true)
       expect(registrations.some(row => row.name === 'shell.overlay')).toBe(true)
+      expect(registrations.filter(row => row.name === 'conversation.layout.actions')).toHaveLength(2)
     })
+    expect(registrations.filter(row => row.name === 'conversation.layout.actions').map(row => [row.id, row.order]))
+      .toEqual([
+        ['better-sidebar:bottom-toggle', 90],
+        ['better-sidebar:right-toggle', 100],
+      ])
+    const rightAction = registrations.find(row => row.id === 'better-sidebar:right-toggle')
+    const rightInjected = rightAction?.inject?.() as { toggleRightSidebar: () => void }
+    rightInjected.toggleRightSidebar()
+    expect(toggleRightSidebar).toHaveBeenCalledOnce()
     expect(document.querySelector('body > [data-dsh-better-sidebar]')).toBeNull()
+
+    collapse('right-sidebar')
+    expect(registrations.some(row => row.name === 'right-sidebar')).toBe(false)
+    expect(registrations.some(row => row.name === 'shell.overlay')).toBe(true)
+    expect(registrations.filter(row => row.name === 'conversation.layout.actions')).toHaveLength(2)
+    declare('right-sidebar')
+    expect(registrations.filter(row => row.name === 'right-sidebar')).toHaveLength(1)
+
+    collapse('shell.overlay')
+    expect(registrations.some(row => row.name === 'shell.overlay')).toBe(false)
+    expect(registrations.some(row => row.name === 'right-sidebar')).toBe(true)
+    expect(registrations.filter(row => row.name === 'conversation.layout.actions')).toHaveLength(2)
+    declare('shell.overlay')
+    expect(registrations.filter(row => row.name === 'shell.overlay')).toHaveLength(1)
+
+    collapse('conversation.layout.actions')
+    expect(registrations.some(row => row.name === 'conversation.layout.actions')).toBe(false)
+    declare('conversation.layout.actions')
+    expect(registrations.filter(row => row.name === 'conversation.layout.actions')).toHaveLength(2)
 
     externalDisable = true
     remoteListener?.()
     await vi.waitFor(() => {
       expect(registrations.some(row => row.name === 'right-sidebar')).toBe(false)
       expect(registrations.some(row => row.name === 'shell.overlay')).toBe(false)
+      expect(registrations.some(row => row.name === 'conversation.layout.actions')).toBe(false)
+    })
+    expect(injections.has('right-sidebar')).toBe(false)
+    expect(injections.has('shell.overlay')).toBe(false)
+    expect(injections.has('conversation.layout.actions')).toBe(false)
+    collapse('conversation.layout.actions')
+    declare('conversation.layout.actions')
+    expect(registrations.some(row => row.name === 'conversation.layout.actions')).toBe(false)
+
+    externalDisable = false
+    remoteListener?.()
+    await vi.waitFor(() => {
+      expect(registrations.filter(row => row.name === 'right-sidebar')).toHaveLength(1)
+      expect(registrations.filter(row => row.name === 'shell.overlay')).toHaveLength(1)
+      expect(registrations.filter(row => row.name === 'conversation.layout.actions')).toHaveLength(2)
     })
   })
 

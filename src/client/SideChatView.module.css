@@ -1,0 +1,367 @@
+/* Side Chat tab: ONE side conversation per tab (Codex-style). Visual
+ * language mirrors the main conversation pane: right-aligned user bubbles
+ * on --dsw-specific-bubble, full-width assistant markdown, a capsule
+ * composer card on --dsw-specific-input-major with a circular accent
+ * send/stop button. Tool calls, thinking and context injections share one
+ * collapsible-line chrome; shimmer is reserved for generating states
+ * (running status line, streaming rows, the creating hero). Ordinary
+ * transcript rows have no entrance motion. */
+.sidechat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── thread header (status dot · agent badge · threads menu · save) ─── */
+.sidechatDetailHeader {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 36px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--dsw-alias-hairline);
+}
+
+.sidechatHeaderDot {
+  flex: none;
+}
+
+.sidechatHeaderSpacer {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidechatAgentBadge {
+  flex: none;
+  max-width: 55%;
+  padding: 1px 8px;
+  border: 1px solid var(--dsw-alias-hairline);
+  border-radius: 999px;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidechatIconBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  transition: background-color 100ms ease-out, color 100ms ease-out;
+}
+
+.sidechatIconBtn:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.sidechatIconBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── hero (unbound tab: the one brand moment) ───────────────────────── */
+.sidechatHero {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px 20px;
+  color: var(--dsw-alias-label-tertiary);
+  text-align: center;
+  animation: sidechatFadeIn 200ms ease-out;
+}
+
+.sidechatHeroTitle {
+  font: var(--dsw-font-s-14);
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.sidechatHeroDesc {
+  max-width: 300px;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+  line-height: 1.6;
+}
+
+.sidechatPrimaryBtn {
+  flex: none;
+  margin-top: 4px;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 999px;
+  background: var(--dsw-alias-button-info-fill, var(--dsw-alias-accent));
+  color: var(--dsw-alias-button-info-label, var(--dsw-alias-accent-ink, #fff));
+  font: var(--dsw-font-s-13);
+  cursor: pointer;
+  transition: opacity 100ms ease-out;
+}
+
+.sidechatPrimaryBtn:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.sidechatPrimaryBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.sidechatHint {
+  flex: none;
+  padding: 4px 12px;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.sidechatError {
+  flex: none;
+  padding: 4px 12px;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-danger);
+}
+
+/* ── transcript ─────────────────────────────────────────────────────── */
+.sidechatScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* User message: right-aligned bubble, same surface as the main pane. */
+.sidechatUser {
+  align-self: flex-end;
+  max-width: min(525px, 82%);
+  padding: 10px 16px;
+  border-radius: 22px;
+  background: var(--dsw-specific-bubble);
+  font: var(--dsw-font-markdown-small);
+  color: var(--dsw-alias-label-primary);
+  overflow-wrap: anywhere;
+}
+
+/* Assistant message: full-width narration, no bubble — the main pane way. */
+.sidechatAssistant {
+  align-self: stretch;
+  color: var(--dsw-alias-label-primary);
+  overflow-wrap: anywhere;
+}
+
+/* ── collapsible context rows (tool / thinking / injection, Codex-style) ──
+ * One quiet line — chevron + label + one-line summary — that expands into
+ * an indented body hung on a hairline thread. No cards, no fills: hierarchy
+ * rides ink weight alone. Streaming rows shimmer the label (shimmer =
+ * generating); failed rows go danger; reduced-motion stills every loop. */
+.sidechatRow {
+  align-self: stretch;
+}
+
+.sidechatRowLine {
+  position: relative;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.sidechatRowLabel {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.sidechatRowMono {
+  font-family: var(--dsw-font-mono);
+}
+
+.sidechatRowMeta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--dsw-font-mono);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.sidechatRowFailed .sidechatRowLabel,
+.sidechatRowFailed .sidechatRowMeta {
+  color: var(--dsw-alias-danger);
+}
+
+.sidechatThinkBody {
+  padding: 4px 0 4px 22px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 14px;
+  line-height: 24px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.sidechatCodeBody {
+  min-width: 0;
+  margin: 4px 0 4px 22px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* Shimmer sweep text: generating (streaming row labels, creating hero). */
+.sidechatShimmerText {
+  background-image: linear-gradient(
+    90deg,
+    var(--dsw-alias-label-tertiary) 0%,
+    var(--dsw-alias-label-primary) 50%,
+    var(--dsw-alias-label-tertiary) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: sidechatSweep 2.6s linear infinite;
+}
+
+/* ── running status line (above the composer, main-pane style) ──────── */
+.sidechatStatus {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 14px 6px;
+  animation: sidechatFadeIn 160ms ease-out;
+}
+
+.sidechatStatusText {
+  font: var(--dsw-font-xxs-12);
+  background-image: linear-gradient(
+    90deg,
+    var(--dsw-alias-label-tertiary) 0%,
+    var(--dsw-alias-label-primary) 50%,
+    var(--dsw-alias-label-tertiary) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: sidechatSweep 2.6s linear infinite;
+}
+
+/* ── composer (capsule card, InputBar-aligned) ──────────────────────── */
+.sidechatComposer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 8px 8px;
+  padding: 8px 8px 6px 14px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 22px;
+  background: var(--dsw-specific-input-major);
+  box-shadow: var(--dsw-shadow-lv2);
+}
+
+.sidechatComposerInput {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-markdown-small);
+  line-height: 22px;
+  outline: none;
+  resize: none;
+  max-height: 132px;
+}
+
+.sidechatComposerInput::placeholder {
+  color: var(--dsw-alias-label-caption);
+}
+
+.sidechatComposerBar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.sidechatComposerMeta {
+  flex: 1;
+  min-width: 0;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidechatSendBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--dsw-alias-button-info-fill, var(--dsw-alias-accent));
+  color: var(--dsw-alias-button-info-label, var(--dsw-alias-accent-ink, #fff));
+  cursor: pointer;
+  transition: opacity 100ms ease-out;
+}
+
+.sidechatSendBtn:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.sidechatSendBtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ── motion vocabulary (creation/running only; loops reduced-motion off) */
+@keyframes sidechatFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes sidechatSweep {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidechatHero,
+  .sidechatStatus {
+    animation: none;
+  }
+  .sidechatStatusText,
+  .sidechatShimmerText {
+    animation: none;
+    background-image: none;
+    color: var(--dsw-alias-label-tertiary);
+  }
+}

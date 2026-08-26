@@ -21,7 +21,7 @@ if (g.localStorage === undefined) {
 }
 
 import { createBetterSidebarService, matchUrlTarget, SIDEBAR_FEATURES, SIDEBAR_SERVICE_VERSION } from '../src/client/service.ts'
-import { createSidebarStore, allLeaves, makeDefaultState, openDiffTab, openTabInActivePane, sanitizeState } from '../src/client/state.ts'
+import { createSidebarStore, allLeaves, floatTab, makeDefaultState, openDiffTab, openTabInActivePane, sanitizeState } from '../src/client/state.ts'
 
 describe('BetterSidebar service', () => {
   it('registerTab adds to the registry and dispose removes it', () => {
@@ -469,6 +469,7 @@ describe('service.openTab dedupe', () => {
 describe('service.openTab across the two panels', () => {
   it('openTab lands in the bottom tree when the active pane lives there', () => {
     const store = createSidebarStore()
+    store.setPrefs({ ...store.getPrefs(), bottomPanelEnabled: true })
     const service = createBetterSidebarService(store)
     service.registerTab({ id: 'git', title: 'Git', component: () => null })
     store.setSession('s1')
@@ -481,6 +482,7 @@ describe('service.openTab across the two panels', () => {
 
   it('dedupeKey focuses an existing instance in the OTHER tree (single-instance across panels)', () => {
     const store = createSidebarStore()
+    store.setPrefs({ ...store.getPrefs(), bottomPanelEnabled: true })
     const service = createBetterSidebarService(store)
     service.registerTab({
       id: 'singleton',
@@ -504,6 +506,7 @@ describe('service.openTab across the two panels', () => {
 
   it('closeTab by id closes a tab living in the bottom tree', () => {
     const store = createSidebarStore()
+    store.setPrefs({ ...store.getPrefs(), bottomPanelEnabled: true })
     const service = createBetterSidebarService(store)
     service.registerTab({ id: 'git', title: 'Git', component: () => null })
     store.setSession('s1')
@@ -526,6 +529,40 @@ describe('service.openTab auto-expand for content opens', () => {
   const collapseRightPanel = (store: ReturnType<typeof createSidebarStore>): void => {
     store.reduce(s => ({ ...s, panelOpen: false }))
   }
+
+  it('reveals active docked path opens including dedupe, but never floating, type-only, or inactive landings', () => {
+    const store = createSidebarStore()
+    const revealDockedSurface = vi.fn()
+    const service = createBetterSidebarService(store, { revealDockedSurface })
+    service.registerTab({
+      id: 'editor',
+      title: 'Editor',
+      dedupeKey: tab => tab.path,
+      component: () => null,
+    })
+    store.setSession('s1')
+
+    service.openTab({ type: 'editor', title: 'main.ts', path: '/p/main.ts' })
+    expect(revealDockedSurface).toHaveBeenCalledTimes(1)
+
+    // A content dedupe still lands in the docked pane and must reveal it.
+    service.openTab({ type: 'editor', title: 'main.ts', path: '/p/main.ts' })
+    expect(revealDockedSurface).toHaveBeenCalledTimes(2)
+
+    const editor = allLeaves(store.getSnapshot().state!.splits)
+      .flatMap(leaf => leaf.tabs)
+      .find(tab => tab.path === '/p/main.ts')!
+    store.reduce(state => floatTab(state, editor.id, 80, 80))
+    service.openTab({ type: 'editor', title: 'main.ts', path: '/p/main.ts' })
+    expect(revealDockedSurface).toHaveBeenCalledTimes(2)
+
+    service.openTab({ type: 'editor', title: 'Editor' })
+    service.openTab(
+      { type: 'editor', title: 'other.ts', path: '/p/other.ts' },
+      { sessionId: 's2' },
+    )
+    expect(revealDockedSurface).toHaveBeenCalledTimes(2)
+  })
 
   it('expands the collapsed drawer for a path (file) open on a narrow viewport', () => {
     setWidth(390)
@@ -574,32 +611,33 @@ describe('service.openTab auto-expand for content opens', () => {
 
   it('expands the collapsed right panel for a path (file) open on a wide viewport', () => {
     const store = createSidebarStore()
-    const openRightSidebar = vi.fn()
-    const service = createBetterSidebarService(store, { openRightSidebar })
+    const revealDockedSurface = vi.fn()
+    const service = createBetterSidebarService(store, { revealDockedSurface })
     service.registerTab({ id: 'editor', title: 'Editor', component: () => null })
     store.setSession('s1')
     collapseRightPanel(store)
     service.openTab({ type: 'editor', title: 'main.ts', path: '/p/main.ts' })
     const state = store.getSnapshot().state!
-    expect(openRightSidebar).toHaveBeenCalledOnce()
+    expect(revealDockedSurface).toHaveBeenCalledOnce()
     expect(state.panelOpen).toBe(true)
     expect(allLeaves(state.splits).flatMap(l => l.tabs).some(t => t.type === 'editor')).toBe(true)
   })
 
   it('expands the collapsed right panel for a URL (browser) open on a wide viewport', () => {
     const store = createSidebarStore()
-    const openRightSidebar = vi.fn()
-    const service = createBetterSidebarService(store, { openRightSidebar })
+    const revealDockedSurface = vi.fn()
+    const service = createBetterSidebarService(store, { revealDockedSurface })
     service.registerTab({ id: 'browser', title: 'Browser', component: () => null })
     store.setSession('s1')
     collapseRightPanel(store)
     service.openTab({ type: 'browser', url: 'https://example.com', title: 'example.com' })
-    expect(openRightSidebar).toHaveBeenCalledOnce()
+    expect(revealDockedSurface).toHaveBeenCalledOnce()
     expect(store.getSnapshot().state!.panelOpen).toBe(true)
   })
 
   it('a wide-viewport path open landing in the bottom tree expands the bottom panel instead', () => {
     const store = createSidebarStore()
+    store.setPrefs({ ...store.getPrefs(), bottomPanelEnabled: true })
     const service = createBetterSidebarService(store)
     service.registerTab({ id: 'editor', title: 'Editor', component: () => null })
     store.setSession('s1')
@@ -615,13 +653,13 @@ describe('service.openTab auto-expand for content opens', () => {
 
   it('keeps a collapsed panel for a type-only open on a wide viewport', () => {
     const store = createSidebarStore()
-    const openRightSidebar = vi.fn()
-    const service = createBetterSidebarService(store, { openRightSidebar })
+    const revealDockedSurface = vi.fn()
+    const service = createBetterSidebarService(store, { revealDockedSurface })
     service.registerTab({ id: 'explorer', title: 'Explorer', component: () => null })
     store.setSession('s1')
     collapseRightPanel(store)
     service.openTab({ type: 'explorer', title: 'Explorer' })
-    expect(openRightSidebar).not.toHaveBeenCalled()
+    expect(revealDockedSurface).not.toHaveBeenCalled()
     expect(store.getSnapshot().state?.panelOpen).toBe(false)
   })
 
@@ -718,6 +756,7 @@ describe('updateTab (v0.12.0)', () => {
 describe('activateTab (v0.12.0)', () => {
   it('activates a tab in either tree and fires onActivate with the session scope', () => {
     const store = createSidebarStore()
+    store.setPrefs({ ...store.getPrefs(), bottomPanelEnabled: true })
     const service = createBetterSidebarService(store)
     const seen: Array<{ tab: string; sessionId: string }> = []
     service.registerTab({
@@ -1006,14 +1045,14 @@ describe('independent CR follow-up fixes', () => {
 
   it('a targeted open into an INACTIVE session never auto-expands its panels', () => {
     const store = createSidebarStore()
-    const openRightSidebar = vi.fn()
-    const service = createBetterSidebarService(store, { openRightSidebar })
+    const revealDockedSurface = vi.fn()
+    const service = createBetterSidebarService(store, { revealDockedSurface })
     service.registerTab({ id: 'editor', title: 'Editor', component: () => null })
     store.setSession('s1')
     // The target session starts collapsed.
     store.reduceFor('s2', s => ({ ...s, panelOpen: false, bottomOpen: false }))
     service.openTab({ type: 'editor', title: 'main.ts', path: '/p/main.ts' }, { sessionId: 's2' })
-    expect(openRightSidebar).not.toHaveBeenCalled()
+    expect(revealDockedSurface).not.toHaveBeenCalled()
     // Nothing is in sight for the user — the open must not expand s2.
     store.setSession('s2')
     expect(store.getSnapshot().state?.panelOpen).toBe(false)
@@ -1062,5 +1101,71 @@ describe('independent CR follow-up fixes', () => {
     const service = createBetterSidebarService(store)
     service.registerFileViewer({ id: 'csv', exts: ['csv'], fetchStrategy: 'custom', component: () => null })
     expect(() => service.registerFileViewer({ id: 'csv', exts: ['csv'], fetchStrategy: 'custom', component: () => null })).toThrow(/already registered/)
+  })
+
+  describe('free windows (v0.16.0)', () => {
+    it('openTab dedupe focuses a FLOATING tab by raising its window (no duplicate, no panel expansion)', () => {
+      const store = createSidebarStore()
+      const service = createBetterSidebarService(store)
+      service.registerTab({ id: 'singleton', title: 'S', dedupeKey: () => 'singleton', component: () => null })
+      store.setSession('s1')
+      service.openTab({ type: 'singleton', title: 'S' })
+      // Float the singleton out, then float a second tab above it and
+      // collapse the panel — the focus must raise the window in place
+      // without reopening a tab or expanding anything.
+      store.reduce(s => floatTab(s, 'singleton', 100, 100))
+      service.openTab({ type: 'singleton', title: 'S' })
+      store.reduce(s => floatTab(s, (s.splits as { tabs: Array<{ id: string }> }).tabs[0]!.id, 100, 100))
+      const before = store.getSnapshot().state!
+      expect(before.floats).toHaveLength(2)
+      store.reduce(s => ({ ...s, panelOpen: false }))
+      service.openTab({ type: 'singleton', title: 'S' })
+      const after = store.getSnapshot().state!
+      // Raised to the top, not duplicated.
+      expect(after.floats).toHaveLength(2)
+      expect(after.floats.at(-1)!.tab.type).toBe('singleton')
+      // The panel stays collapsed (a floating tab is already in sight).
+      expect(after.panelOpen).toBe(false)
+      expect(allLeaves(after.splits).some(l => l.tabs.some(t => t.type === 'singleton'))).toBe(false)
+    })
+
+    it('closeTab on a floating tab closes it WITH the window and fires onClose', () => {
+      const store = createSidebarStore()
+      const service = createBetterSidebarService(store)
+      const onClose = vi.fn()
+      service.registerTab({ id: 'notes', title: 'Notes', single: true, onClose, component: () => null })
+      store.setSession('s1')
+      service.openTab({ type: 'notes', title: 'Notes' })
+      store.reduce(s => floatTab(s, 'notes', 50, 50))
+      expect(store.getSnapshot().state!.floats).toHaveLength(1)
+      service.closeTab('notes', { sessionId: 's1' })
+      const after = store.getSnapshot().state!
+      expect(after.floats).toHaveLength(0)
+      expect(onClose).toHaveBeenCalledTimes(1)
+      // Unknown ids stay a strict no-op.
+      service.closeTab('notes')
+      expect(store.getSnapshot().state).toBe(after)
+    })
+
+    it('activateTab on a floating tab raises the window and fires onActivate', () => {
+      const store = createSidebarStore()
+      const service = createBetterSidebarService(store)
+      const onActivate = vi.fn()
+      service.registerTab({ id: 'notes', title: 'Notes', single: true, onActivate, component: () => null })
+      store.setSession('s1')
+      service.openTab({ type: 'notes', title: 'Notes' })
+      service.openTab({ type: 'notes', title: 'Notes' })
+      store.reduce(s => floatTab(s, 'notes', 50, 50))
+      store.reduce(s => floatTab(s, (s.splits as { tabs: Array<{ id: string }> }).tabs[0]!.id, 60, 60))
+      const before = store.getSnapshot().state!
+      expect(before.floats).toHaveLength(2)
+      expect(before.floats.at(-1)!.tab.type).not.toBe('notes')
+      service.activateTab('notes')
+      const after = store.getSnapshot().state!
+      expect(after.floats.at(-1)!.tab.type).toBe('notes')
+      // Two activations total: the second openTab's dedupe focus (before the
+      // float) plus THIS explicit activateTab — both legitimate focuses.
+      expect(onActivate).toHaveBeenCalledTimes(2)
+    })
   })
 })

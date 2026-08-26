@@ -1,9 +1,10 @@
 /**
  * fs-search: the host's recursive file-name search behind the editor side
  * panel's search box. Matches are case-insensitive name substrings, reported
- * RELATIVE to the root ('/'-separated); `.git` directories are skipped,
- * symlinked directories are never descended (cycle safety), and the
- * maxMatches/maxVisited budgets stop a runaway walk with `truncated: true`.
+ * RELATIVE to the root ('/'-separated); noise directories (`.git`,
+ * `node_modules`, build caches) are skipped, symlinked directories are
+ * never descended (cycle safety), and the maxMatches/maxVisited budgets
+ * stop a runaway walk with `truncated: true`.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -88,20 +89,15 @@ describe('fs-search', () => {
 
     expect(result).toEqual({ matches: ['-foo-zeta.md', 'src/-foo.md'], truncated: true })
     expect(runCommand).toHaveBeenCalledOnce()
-    expect(runCommand).toHaveBeenCalledWith('fd', [
+    expect(runCommand).toHaveBeenCalledWith('fd', expect.arrayContaining([
       '-H',
       '--no-ignore',
       '-F',
       '-i',
       '--print0',
-      '--exclude',
-      '.git',
-      '--max-results',
-      '2',
-      '--',
-      '-foo',
-      '.',
-    ], { cwd: '/workspace', timeoutMs: 10_000 })
+      '--exclude', '.git',
+    ]), { cwd: '/workspace', timeoutMs: 10_000 })
+    expect(runCommand.mock.calls[0]![1].slice(-5)).toEqual(['--max-results', '2', '--', '-foo', '.'])
     expect(runCommand.mock.calls[0]![1]).not.toContain('-t')
     expect(runCommand.mock.calls[0]![1]).not.toContain('-L')
   })
@@ -320,6 +316,24 @@ describe('fs-search', () => {
     expect(runCommand.mock.calls[0]![1]).toEqual(expect.arrayContaining(['-F', '--', '.md', '.']))
   })
 
+  it('passes every noise-directory exclusion to fd', async () => {
+    const runCommand = vi.fn<RunCommand>(async () => ({ code: 0, stdout: '', stderr: '' }))
+
+    await searchFiles('/workspace', 'guide', {
+      engine: 'fd',
+      resolvePackagedRg: async () => null,
+      runCommand,
+    })
+
+    const args = runCommand.mock.calls[0]![1]
+    expect(args).toEqual(expect.arrayContaining([
+      '--exclude', 'node_modules',
+      '--exclude', '.pnpm-store',
+      '--exclude', 'dist',
+      '--exclude', 'build',
+    ]))
+  })
+
   it('falls through the rg chain when the forced fd seam fails', async () => {
     const runCommand = vi.fn<RunCommand>(async command => command === 'fd'
       ? { code: 2, stdout: '', stderr: 'fd failed' }
@@ -358,18 +372,34 @@ describe('fs-search', () => {
 
     expect(directory).toEqual({ matches: ['src'], truncated: false })
     expect(file).toEqual({ matches: ['src/util.ts'], truncated: false })
-    expect(runCommand).toHaveBeenCalledWith('/fake/rg', [
+    expect(runCommand).toHaveBeenCalledWith('/fake/rg', expect.arrayContaining([
       '--no-config',
       '--files',
       '--hidden',
       '--no-ignore',
       '--no-follow',
-      '--glob',
-      '!.git',
-      '--glob',
-      '!.git/**',
+      '--iglob', '!.git',
+      '--iglob', '!.git/**',
       '--null',
-    ], { cwd: '/workspace', timeoutMs: 10_000 })
+    ]), { cwd: '/workspace', timeoutMs: 10_000 })
+  })
+
+  it('passes every noise-directory exclusion to ripgrep', async () => {
+    const runCommand = vi.fn<RunCommand>(async () => ({ code: 0, stdout: '', stderr: '' }))
+
+    await searchFiles('/workspace', 'guide', {
+      engine: 'rg',
+      resolvePackagedRg: async () => '/fake/rg',
+      runCommand,
+    })
+
+    const args = runCommand.mock.calls[0]![1]
+    expect(args).toEqual(expect.arrayContaining([
+      '--iglob', '!node_modules', '--iglob', '!node_modules/**',
+      '--iglob', '!.pnpm-store', '--iglob', '!.pnpm-store/**',
+      '--iglob', '!dist', '--iglob', '!dist/**',
+      '--iglob', '!build', '--iglob', '!build/**',
+    ]))
   })
 
   it('uses PATH ripgrep when the packaged binary is unavailable', async () => {
@@ -510,6 +540,27 @@ describe('fs-search', () => {
       expect((await searchWithJs(dir, 'readme')).matches).toEqual(['README.md'])
       expect((await searchWithJs(dir, 'config')).matches).toEqual([])
       expect((await searchWithJs(dir, '.git')).matches).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('never descends into node_modules or other noise directories', async () => {
+    const dir = makeFixture()
+    try {
+      mkdirSync(join(dir, 'node_modules', 'left-pad'), { recursive: true })
+      mkdirSync(join(dir, 'web', 'dist'), { recursive: true })
+      writeFileSync(join(dir, 'node_modules', 'left-pad', 'guide.md'), 'dep')
+      writeFileSync(join(dir, 'web', 'dist', 'bundle.js'), 'build')
+      writeFileSync(join(dir, 'web', 'app.ts'), 'src')
+      // A match hidden behind node_modules / dist must not appear; project
+      // files after those forests must still be reachable within budget.
+      expect((await searchFiles(dir, 'guide')).matches).toEqual(['docs/guide.md'])
+      expect((await searchFiles(dir, 'left-pad')).matches).toEqual([])
+      expect((await searchFiles(dir, 'bundle')).matches).toEqual([])
+      expect((await searchFiles(dir, 'app.ts')).matches).toEqual(['web/app.ts'])
+      expect((await searchFiles(dir, 'node_modules')).matches).toEqual([])
+      expect((await searchFiles(dir, 'dist')).matches).toEqual([])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

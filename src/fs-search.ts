@@ -3,13 +3,14 @@
  * file listing is preferred when available, with the original opendir walk as
  * the fallback. The query is a case-insensitive substring of each entry's
  * NAME (paths stay relative to the search root — the client resolves them
- * against the session cwd). No engine applies .gitignore semantics; `.git`
- * directories are skipped outright and symlink directories are not followed.
+ * against the session cwd). No engine applies .gitignore semantics; known
+ * noise directories are skipped outright and symlink directories are not
+ * followed.
  *
  * Two performance budgets bound the walk: `maxMatches` (the client renders
- * the flat list) and `maxVisited` (a runaway tree — a home directory root,
- * a node_modules forest — must not stall the host). Exceeding either stops
- * early with `truncated: true`.
+ * the flat list) and `maxVisited` (a runaway tree — a home directory root
+ * — must not stall the host). Exceeding either stops early with
+ * `truncated: true`.
  */
 import { spawn } from 'node:child_process'
 import { opendir } from 'node:fs/promises'
@@ -209,16 +210,48 @@ function runCommand(command: string, args: readonly string[], opts: { cwd?: stri
   })
 }
 
+/**
+ * Dependency, VCS, package-store, cache, and build-output forests. Names are
+ * compared case-insensitively by the JS walker; native engines receive the
+ * same names through their exclusion arguments.
+ */
+const SEARCH_SKIP_DIR_NAMES = [
+  '.git',
+  'node_modules',
+  '.pnpm-store',
+  '.yarn',
+  '.turbo',
+  '.turbopack',
+  '.next',
+  '.nuxt',
+  '.output',
+  '.cache',
+  '.parcel-cache',
+  'coverage',
+  'dist',
+  'build',
+  'out',
+  '.umi',
+  '.umi-production',
+  '.dumi',
+] as const
+
+const SEARCH_SKIP_DIRS = new Set<string>(SEARCH_SKIP_DIR_NAMES)
+const FD_EXCLUDE_ARGS = SEARCH_SKIP_DIR_NAMES.flatMap(name => ['--exclude', name])
+const RG_EXCLUDE_ARGS = SEARCH_SKIP_DIR_NAMES.flatMap(name => [
+  '--iglob',
+  `!${name}`,
+  '--iglob',
+  `!${name}/**`,
+])
+
 const RG_ARGS = [
   '--no-config',
   '--files',
   '--hidden',
   '--no-ignore',
   '--no-follow',
-  '--glob',
-  '!.git',
-  '--glob',
-  '!.git/**',
+  ...RG_EXCLUDE_ARGS,
   '--null',
 ] as const
 
@@ -236,8 +269,7 @@ async function searchWithFd(
     '-F',
     '-i',
     '--print0',
-    '--exclude',
-    '.git',
+    ...FD_EXCLUDE_ARGS,
     '--max-results',
     String(maxMatches),
     '--',
@@ -410,8 +442,8 @@ export async function searchFiles(root: string, query: string, opts: FsSearchOpt
         truncated = true
         return
       }
-      // .git is VCS-internal noise: never matched, never descended.
-      if (dirent.isDirectory() && dirent.name === '.git') continue
+      // Dependency / VCS / build-output forests: never matched, never descended.
+      if (dirent.isDirectory() && SEARCH_SKIP_DIRS.has(dirent.name.toLowerCase())) continue
       if (dirent.name.toLowerCase().includes(needle)) {
         matches.push(join(relative(root, dir), dirent.name))
         if (matches.length >= maxMatches) {

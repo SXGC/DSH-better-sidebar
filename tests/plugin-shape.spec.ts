@@ -65,12 +65,23 @@ describe('dsh-better-sidebar plugin export shape', () => {
     // The terminal tools default OFF (the feature is dormant until the user
     // enables it in the side card settings).
     expect(resolved.agentTerminalTools).toBe(false)
+    // The sidebar-open tool defaults OFF too (same dormant-until-enabled rule).
+    expect(resolved.agentOpenTools).toBe(false)
+    // The optional bottom workbench is dormant until explicitly enabled.
+    expect(resolved.bottomPanelEnabled).toBe(false)
     // The terminal font customizations default to the theme (empty family)
     // and 13px.
     expect(resolved.terminalFontFamily).toBe('')
     expect(resolved.terminalFontSize).toBe(13)
-    // The position-compat mode defaults OFF (the normal layout is default),
-    // with the strip defaulting to 40px.
+    // The position-compat scheme is declared WITHOUT a schema default so a
+    // stored document that predates it resolves without the field — the
+    // CLIENT parsePrefs then applies the conservative `auto` default (or
+    // migrates the legacy boolean), which is exactly what makes old
+    // documents migrate instead of silently flipping to a scheme. The
+    // legacy strip keeps its schema default of 40px.
+    expect(resolved.titleBarScheme).toBeUndefined()
+    expect(resolved.titleBarPresetId).toBeUndefined()
+    expect(resolved.customCss).toBeUndefined()
     expect(resolved.titleBarCompat).toBe(false)
     expect(resolved.titleBarStripPx).toBe(40)
     // The enable-switch maps resolve to {} (everything on) for old documents.
@@ -85,6 +96,6 @@ describe('dsh-better-sidebar plugin export shape', () => {
     const overridden = (PrefsSchema as unknown as {
       (input: Record<string, unknown> | undefined): Record<string, unknown>
     })({ openByDefault: false, defaultWidthPercent: 45 })
-    expect(overridden).toEqual({ openByDefault: false, defaultWidthPercent: 45, autoOpenSubagent: true, autoOpenJobs: true, agentTerminalTools: false, bottomPanelAutoTerminal: true, terminalFontFamily: '', terminalFontSize: 13, interceptOpenPath: true, editorExplorer: false, terminalShell: '', terminalShellArgs: '', titleBarCompat: false, titleBarStripPx: 40, htmlViewerNoSandbox: false, htmlViewerDefaultUnsafe: false, browserNoSandbox: false, browserInterceptLinks: true, browserInterceptHttp: true, browserInterceptHttps: false, tabsEnabled: {}, viewersEnabled: {}, pluginSettings: {} })
+    expect(overridden).toEqual({ openByDefault: false, defaultWidthPercent: 45, autoOpenSubagent: true, autoOpenJobs: true, agentTerminalTools: false, agentOpenTools: false, bottomPanelEnabled: false, bottomPanelAutoTerminal: true, terminalFontFamily: '', terminalFontSize: 13, interceptOpenPath: true, editorExplorer: false, terminalShell: '', terminalShellArgs: '', titleBarCompat: false, titleBarStripPx: 40, htmlViewerNoSandbox: false, htmlViewerDefaultUnsafe: false, browserNoSandbox: false, browserInterceptLinks: true, browserInterceptHttp: true, browserInterceptHttps: false, browserAllowedLoopback: '', tabsEnabled: {}, viewersEnabled: {}, pluginSettings: {} })
   })
 })

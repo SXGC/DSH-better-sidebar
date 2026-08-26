@@ -43,8 +43,11 @@ interface MountedSidebar {
   unmount: () => void
 }
 
+/** Unique per-test session ids (see the comment inside). */
+let sessionSeq = 0
+
 /** Mount the real Sidebar shell against a minimal context (real store + service). */
-function mountSidebar({ current }: { current: string | undefined } = { current: 's1' }): MountedSidebar {
+function mountSidebar({ current }: { current: string | undefined } = { current: 'active' }): MountedSidebar {
   vi.stubGlobal('WebSocket', FakeWebSocket)
   const container = document.createElement('div')
   document.body.append(container)
@@ -52,22 +55,34 @@ function mountSidebar({ current }: { current: string | undefined } = { current: 
   const service = createBetterSidebarService(store)
   // Fresh-session seed: open the panel explicitly (openByDefault defaults off).
   store.setPrefs({ ...store.getPrefs(), openByDefault: true })
-  store.setSession(current)
+  // Unique session per test — the store persists per-session state to
+  // localStorage (200ms debounce); a shared id lets a previous test's late
+  // write leak into this store's setSession restore.
+  const sessionId = current === undefined ? undefined : `${current}-${++sessionSeq}`
+  store.setSession(sessionId)
   // useSyncExternalStore requires STABLE snapshots across calls (the real DSH
   // services return stable objects) — a fresh object per call loops forever.
   const localeSnapshot = { active: 'en' }
   const sessionsSnapshot = {
-    current,
+    current: sessionId,
     // cwd present → api.sessionCwd is never called in these tests.
-    byId: { s1: { cwd: '/tmp' } },
+    byId: sessionId === undefined ? {} : { [sessionId]: { cwd: '/tmp' } },
   }
   const ctx = {
     locale: { subscribe: () => () => {}, getSnapshot: () => localeSnapshot },
     sessions: { list: { subscribe: () => () => {}, getSnapshot: () => sessionsSnapshot } },
     betterSidebar: service,
+    get: (name: string) => name === 'betterSidebar' ? service : undefined,
   }
   const root: Root = createRoot(container)
-  act(() => { root.render(createElement(Sidebar, { ctx: ctx as never, store, collapsed: false, width: 360 })) })
+  act(() => {
+    root.render(createElement(Sidebar, {
+      ctx: ctx as never,
+      store,
+      collapsed: false,
+      revealDockedSurface: () => {},
+    }))
+  })
   return {
     container,
     store,
@@ -81,6 +96,9 @@ function mountSidebar({ current }: { current: string | undefined } = { current: 
 
 afterEach(() => {
   document.body.innerHTML = ''
+  // Belt and braces: drop any persisted layout a pending 200ms debounce
+  // write left behind between tests (unique session ids already isolate).
+  localStorage.clear()
   vi.unstubAllGlobals()
 })
 
@@ -99,6 +117,14 @@ describe('official-layout isolation', () => {
     unmount()
     expect(htmlStyle.getPropertyValue('--dsh-sidebar-width')).toBe('')
     expect(htmlStyle.getPropertyValue('--dsh-sidebar-height')).toBe('')
+  })
+
+  it('does not render the bottom surface, resize handle, or close action while the feature is disabled', () => {
+    const { container, unmount } = mountSidebar()
+    expect(container.querySelector('[data-dsh-bottom-panel]')).toBeNull()
+    expect(container.querySelector(`[aria-label="${t('collapseBottomPanel')}"]`)).toBeNull()
+    expect(container.querySelector('[class*="bottomResize"]')).toBeNull()
+    unmount()
   })
 })
 

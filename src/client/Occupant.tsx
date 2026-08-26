@@ -33,7 +33,9 @@ export function Occupant({ collapsed, width, renderWorkbench, publishOwner }: Oc
 }
 
 /** Tiny activation-local observable bridging owner props into shell.overlay controls. */
-export function createRightSidebarOwnerSource(): SnapshotSource<RightSidebarOwnerProps> & {
+export function createRightSidebarOwnerSource(
+  onPublish?: (owner: RightSidebarOwnerProps) => void,
+): SnapshotSource<RightSidebarOwnerProps> & {
   publish: (owner: RightSidebarOwnerProps) => void
 } {
   let snapshot: RightSidebarOwnerProps = { collapsed: true, width: 0 }
@@ -45,9 +47,11 @@ export function createRightSidebarOwnerSource(): SnapshotSource<RightSidebarOwne
       return () => { listeners.delete(listener) }
     },
     publish: (owner) => {
-      if (owner.collapsed === snapshot.collapsed && owner.width === snapshot.width) return
-      snapshot = owner
-      for (const listener of listeners) listener()
+      if (owner.collapsed !== snapshot.collapsed || owner.width !== snapshot.width) {
+        snapshot = owner
+        for (const listener of listeners) listener()
+      }
+      onPublish?.(owner)
     },
   }
 }

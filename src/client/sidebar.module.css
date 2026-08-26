@@ -10,6 +10,18 @@
 
 /* ── Shell ─────────────────────────────────────────────────────────────── */
 
+/* Skinning contract (token-driven): every surface here consumes DSH's
+   generic tokens (`--dsw-alias-*`), NEVER `--dsw-specific-sidebar-fill` —
+   skin systems override that token to restyle the APP's own left-nav column
+   (dsh-web-ui skins make it translucent glass or theme colors, Aqua makes it
+   transparent), and a panel consuming it would lose its fill or clash with
+   the label tokens. The panels use the generic card surface
+   `--dsw-alias-bg-layer-1`, which every dsh-web-ui skin overrides — so
+   switching skins in the dsh-web-ui skin center re-skins the sidebar panels
+   automatically (see AGENTS.md §8). */
+
+/* Official right-sidebar occupant. The host controls the column's outer
+   geometry; this node only constrains the docked workbench. */
 .occupant {
   position: relative;
   width: 100%;
@@ -24,103 +36,56 @@
   pointer-events: none;
 }
 
-/* Skinning contract (token-driven): every surface here consumes DSH's
-   generic tokens (`--dsw-alias-*`), NEVER `--dsw-specific-sidebar-fill` —
-   skin systems override that token to restyle the APP's own left-nav column
-   (dsh-web-ui skins make it translucent glass or theme colors, Aqua makes it
-   transparent), and a panel consuming it would lose its fill or clash with
-   the label tokens. The panels use the generic card surface
-   `--dsw-alias-bg-layer-1`, which every dsh-web-ui skin overrides — so
-   switching skins in the dsh-web-ui skin center re-skins the sidebar panels
-   automatically (see AGENTS.md §8). */
-
-/* The persistent expand/collapse cluster: two rail controls side by side
-   (bottom panel's glyph LEFT of the right panel's). ToggleCluster supplies
-   the live inline `right` offset: on desktop a 68px clearance that keeps the
-   cluster left of the Session header's More trigger (28px trailing padding +
-   32px trigger + 8px gap), plus the official owner's width on an open track;
-   10px on mobile, where the header already reserves the trailing strip.
-   Keeping the controls just outside the fourth track makes them reachable
-   without trying to out-stack the AppFrame column from inside shell.overlay's
-   stacking context. */
-.toggleCluster {
-  position: fixed;
-  /* env() resolves to 0 on devices without a top inset (desktops). */
-  top: calc(3px + env(safe-area-inset-top));
-  right: 10px;
-  z-index: 45;
+.dockedSurface {
+  position: relative;
   display: flex;
-  flex-direction: row;
-  gap: 4px;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+/* The shell makes every direct overlay contribution interactive. Restore the
+   frame-wide click-through contract; only actual plugin chrome opts back in. */
+.overlaySurface {
+  position: absolute;
+  inset: 0;
+  pointer-events: none !important;
+}
+
+/* One frame-wide click-through surface inside DSH shell.overlay. */
+.floatingLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.floatingLayer > * {
   pointer-events: auto;
 }
 
-/* The closed-state affordance is the native rail icon control: a plain
-   28px circle (the app's icon-button size — the cluster must stay inside
-   the 34px tab-strip band so it never covers the pane headers below),
-   transparent fill, secondary ink; hover raises the fill. No border, no
-   shadow — the icon alone is the affordance. */
-.toggleButton {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-  transition:
-    background var(--ds-transition-duration-slow) var(--ds-ease-in-out),
-    color var(--ds-transition-duration-slow) var(--ds-ease-in-out);
-}
-
-.toggleButton:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-}
-
-.toggleButton:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
 .panel {
+  box-sizing: border-box;
   position: relative;
-  width: 100%;
-  height: 100%;
-  /* z-index 40: above the app's in-flow content, below the app's overlay
-     stack (100+), so menus/tooltips/modals always win over the panels
-     (issue #52). The toggle cluster (45) sits above it; the corner handle
-     is a child and stacks within the panel. */
-  z-index: 40;
+  z-index: 1;
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  /* The generic card surface (see the root contract above). Never
-     `--dsw-specific-sidebar-fill` — skin plugins restyle that token for the
-     app's own left nav and a panel consuming it loses its fill or clashes
-     with labels (#60/#105/#106). */
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  pointer-events: auto;
   background: var(--dsw-alias-bg-layer-1);
-  border-left: 1px solid var(--dsw-alias-border-l2);
-  /* Bottom safe-area (notched phones): the drawer's bottom content clears
-     the home indicator; 0 on desktops. */
   padding-bottom: env(safe-area-inset-bottom);
-  /* Expand/collapse slides the panel; fullscreen animates the width. */
-  transition:
-    transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),
-    width var(--ds-transition-duration-slow) var(--ds-ease-in-out);
 }
 
-/* Collapsed: slid off-screen, interactive nothing, hidden after the slide. */
 .panelHidden {
-  transform: translateX(102%);
   pointer-events: none;
-  visibility: hidden;
-  transition:
-    transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),
-    width var(--ds-transition-duration-slow) var(--ds-ease-in-out),
-    visibility 0s linear var(--ds-transition-duration-slow);
 }
 
 .panelBody {
@@ -132,47 +97,36 @@
 
 /* ── Bottom panel ──────────────────────────────────────────────────────── */
 
-/* The bottom panel: an independent workbench at the bottom of the CENTER
-   column only (the Sidebar shell writes left/right inline: from the app's
-   own left sidebar to the right panel's left edge) — the sidebars never
-   give up any position. Same surface as the right panel, with a top
-   hairline instead of the left one. z-index 40 mirrors the right panel
-   (issue #52: below the app's overlay stack so popups win over the
-   workbench). */
+/* Column-internal secondary workbench. It consumes vertical space only
+   inside the official right-sidebar occupant. */
 .bottomPanel {
-  position: fixed;
-  bottom: 0;
-  z-index: 40;
+  position: relative;
+  box-sizing: border-box;
+  z-index: 2;
   display: flex;
-  flex-direction: column;
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   background: var(--dsw-alias-bg-layer-1);
   border-top: 1px solid var(--dsw-alias-border-l2);
-  /* Bottom safe-area (notched phones); 0 on desktops. */
+  pointer-events: auto;
   padding-bottom: env(safe-area-inset-bottom);
-  /* Expand/collapse slides the panel; height drags animate the height. */
-  transition:
-    transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),
-    height var(--ds-transition-duration-slow) var(--ds-ease-in-out);
+  transition: height var(--ds-transition-duration-slow) var(--ds-ease-in-out);
 }
 
-/* Collapsed: slid off-screen, interactive nothing, hidden after the slide. */
 .bottomPanelHidden {
-  transform: translateY(102%);
+  height: 0 !important;
+  border-top: 0;
   pointer-events: none;
   visibility: hidden;
-  transition:
-    transform var(--ds-transition-duration-slow) var(--ds-ease-in-out),
-    height var(--ds-transition-duration-slow) var(--ds-ease-in-out),
-    visibility 0s linear var(--ds-transition-duration-slow);
 }
 
-/* Height drags write at pointer cadence; easing would detach the edge. */
 .bottomPanel[data-dragging] {
   transition: none;
 }
 
-/* Panel-internal reflows (tabs, editors, terminals) stay isolated from the
-   app shell. */
 .panel,
 .bottomPanel {
   contain: layout style;
@@ -229,26 +183,178 @@
   padding-right: 40px;
 }
 
+/* ── Free windows ──────────────────────────────────────────────────────── */
+
+/* One floating tab: the same card surface as the panels, at viewport
+   coordinates inside the official shell overlay. z-index
+   42: above the panels (40) so a window drags across them, below the
+   toggle cluster (45) and the app's overlay stack (100+, issue #52).
+   Stacking among windows is the floats array order (siblings share the
+   z-index; DOM order wins). Deliberately NO box transition — the header/
+   resize drags write left/top/width/height per frame. Elevated surface,
+   so unlike the flat panels it earns a shadow token. */
+.floatWindow {
+  position: absolute;
+  z-index: 42;
+  display: flex;
+  flex-direction: column;
+  /* Re-enable interaction inside the click-transparent overlay surface. */
+  pointer-events: auto;
+  background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  box-shadow: var(--dsw-shadow-lv3);
+  overflow: hidden;
+  contain: layout style;
+}
+
+.floatWindowDragging {
+  will-change: left, top, width, height;
+}
+
+/* The header: the move/dock-back drag handle, mirroring the tab strip's
+   chrome (34px, hairline bottom, secondary label). */
+.floatHeader {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 4px 0 10px;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-1);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  cursor: grab;
+  user-select: none;
+}
+
+.floatWindowDragging .floatHeader {
+  cursor: grabbing;
+}
+
+.floatTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Mirrors .tabClose. */
+.floatClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  flex: none;
+}
+
+.floatClose:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Mirrors .paneContent's column-flex contract: the tab cell must hand its
+   child a definite WIDTH via align-stretch. A row flex (the default) sizes
+   the main axis (width) from content — intrinsic-zero hosts (e.g. a plugin
+   tab UI) collapse to a 0px-wide sliver and paint nothing (the blank
+   whale-report window). */
+.floatContent {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The SE resize corner (mirror of .cornerHandle). */
+.floatResize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  z-index: 2;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.floatResize:hover {
+  background: var(--dsw-alias-interactive-bg-hover-accent);
+}
+
+/* A pane highlighted as the dock target while a float header drag hovers it
+   (the attribute is written directly by the drag at pointer cadence;
+   skin-addressable via [data-dsh-pane][data-dsh-float-dock-over]). */
+.pane[data-dsh-float-dock-over] {
+  outline: 2px dashed var(--dsw-alias-interactive-bg-hover-accent);
+  outline-offset: -2px;
+}
+
+/* The drag-out hint over the conversation column: a dashed frame marking
+   the drop zone, pointer-transparent so it never disturbs the drag it
+   describes. z-index 46: above the windows (42) for unambiguous feedback,
+   still below the app's overlay stack. */
+.floatDropHint {
+  position: absolute;
+  z-index: 46;
+  pointer-events: none;
+  border: 2px dashed var(--dsw-alias-interactive-bg-hover-accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--dsw-alias-interactive-bg-hover-accent) 12%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.floatDropHintLabel {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l2);
+}
+
+/* ── Desktop drag-region opt-out ──────────────────────────────────────── */
+
+/* Frameless desktop shells make the top strip of the web content draggable
+   (Electron `-webkit-app-region: drag`); pointer events over that strip are
+   swallowed as window drags unless the interactive element opts out
+   (issues #103/#111). The plugin's viewport-corner chrome must declare
+   `no-drag` itself — some shells (Tauri, older desktop builds, third-party
+   wrappers) have no blanket button rule. The property is a no-op in plain
+   browsers and in shells without drag regions — safe everywhere. */
+.tabBar,
+.floatHeader {
+  -webkit-app-region: no-drag;
+}
+
 /* ── Position compatibility mode (Windows native title bar) ────────────── */
 
 /* Windows frameless / hidden-title-bar windows draw the native caption
    strip (minimize / maximize / close) at the window's top-right corner,
    OVER the web content. When the user enables the "position compatibility"
-   pref, the sidebar yields the strip: the toggle cluster drops below it and
-   the right panel's content starts below it — the panel's surface still
+   pref, the sidebar yields the strip: the right panel's content starts below
+   it — the panel's surface still
    spans the full height, so the caption buttons float over empty sidebar
    fill (the VSCode hidden-title-bar look). The strip height is user-tunable
    (`--dsh-title-bar-strip`, written by the Sidebar shell from
    `titleBarStripPx`; 40px fallback). The bottom panel is unaffected: it
    sits at the window's bottom, never under the top strip. */
-:global(body[data-dsh-title-bar-compat]) .toggleCluster {
-  top: calc(var(--dsh-title-bar-strip, 40px) + 3px);
-}
-
 :global(body[data-dsh-title-bar-compat]) .panel {
   /* The caption strip is drawn over the panel's own top edge: keep the
      surface full-height and push the content (the tab strip) below the
-     strip instead. */
+     strip instead. .panelResize is absolutely positioned and unaffected. */
   padding-top: var(--dsh-title-bar-strip, 40px);
 }
 
@@ -641,7 +747,7 @@
   overflow-y: auto;
   /* Deep trees truncate their labels instead of scrolling horizontally. */
   overflow-x: hidden;
-  padding: 2px 6px 8px;
+  padding: 4px 8px 8px;
 }
 
 /* One tree row: the app's session-row cell (34px, radius 8, inset, hover
@@ -673,6 +779,13 @@
 
 .explorerRow:hover {
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* A "Show in folder" reveal highlight: the target row stays tinted until
+   the transient reveal set is cleared (a reload starts unhighlighted). */
+.explorerRowRevealed {
+  background: color-mix(in srgb, var(--dsw-alias-interactive-bg-hover-accent) 18%, transparent);
+  box-shadow: inset 2px 0 0 var(--dsw-alias-interactive-bg-hover-accent);
 }
 
 .explorerDir {
@@ -755,6 +868,198 @@
   text-align: center;
 }
 
+/* Drag a file/folder over a tree row: the target directory row gets a filled
+   highlight (drops land inside it; file rows target their parent directory).
+   The zone frame around the whole tree is the portaled .uploadDropZone. */
+.explorerRowDropTarget {
+  background: var(--dsw-alias-interactive-bg-hover);
+  outline: 1px dashed var(--dsw-alias-interactive-bg-hover-accent);
+  outline-offset: -1px;
+}
+
+/* The sidebar's drop surface: a pointer-inert frame portaled to
+   document.body, fixed over the explorer body's viewport rect at z-1001 —
+   above DSH's own whole-page drop mask (z-1000, see InputBar's
+   document-level intake). The giant box-shadow spread IS the full-viewport
+   mask (same token DSH uses for its drop mask): everything dims except the
+   zone rect, teaching the zone split — the dimmed conversation column still
+   takes drops into the chat natively, the clear frame marks the tree as the
+   workspace-upload zone. Deliberate exception to the "panel stays below the
+   DSH float stack" rule: transient and pointer-events none, so the drop
+   always lands on the row beneath. The hint pill docks at the TOP edge of
+   the zone (right under the search row, the first thing the eye meets),
+   leaving the rows — the actual drop targets — aimable. */
+.uploadDropZone {
+  position: fixed;
+  z-index: 1001;
+  pointer-events: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12px;
+  border: 2px dashed var(--dsw-alias-interactive-bg-hover-accent);
+  border-radius: 10px;
+  box-shadow: 0 0 0 200vmax var(--dsw-alias-bg-mask-drop);
+  animation: dsh-row-in 150ms var(--ds-ease-in-out);
+}
+
+/* The zone's drop hero, docked at the TOP edge (right under the search
+   row, the first thing the eye meets): the colorful tray illustration over
+   the hint pill — stacked so the rows below stay aimable. */
+.uploadDropHero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  padding-top: 8px;
+}
+
+.uploadDropZonePill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-2);
+  box-shadow: var(--dsw-shadow-lv2);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxs-strong-12);
+}
+
+.uploadDropZoneText {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The left zone's invitation: centered in the viewport space beside the
+   tree (inline width = the zone's left edge), telling the user the dimmed
+   conversation column still accepts drops — into the chat, natively. */
+.uploadDropChatHint {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 1002;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: dsh-row-in 150ms var(--ds-ease-in-out);
+}
+
+/* The invitation's content: the colorful photo-cards illustration over the
+   label — the drop overlay is this flow's one brand moment, so it gets the
+   color the rest of the UI never does (palette borrowed from DSH's native
+   drop illustration so the two zones read as one family). */
+.uploadDropChatCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+  text-align: center;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-s-strong-14);
+}
+
+/* Full-window upload progress: blurred scrim + card (same mask/backdrop
+   tokens as the repo's Modal primitive; absolute within the tree panel so it
+   never covers the conversation column). */
+.uploadOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--dsw-alias-bg-mask-1);
+  backdrop-filter: var(--dsw-mask-blur);
+  animation: dsh-row-in 150ms var(--ds-ease-in-out);
+}
+
+.uploadOverlayCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 280px;
+  max-width: min(420px, calc(100% - 48px));
+  padding: 20px 24px;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 24px;
+  background: var(--dsw-alias-bg-layer-2);
+  box-shadow: var(--dsw-shadow-lv3);
+}
+
+.uploadOverlayTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: var(--dsw-font-s-strong-14);
+  color: var(--dsw-alias-label-primary);
+}
+
+.uploadOverlayTitle > svg {
+  flex: none;
+}
+
+.uploadOverlayTitle > span {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.uploadOverlayProgress {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--dsw-alias-border-l2);
+  overflow: hidden;
+}
+
+.uploadOverlayProgressFill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--dsw-alias-interactive-bg-hover-accent);
+  transition: width 150ms var(--ds-ease-in-out);
+}
+
+.uploadOverlayStatus {
+  min-height: 1em;
+  font: var(--dsw-font-xxs-12);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.uploadOverlayCancel {
+  align-self: flex-end;
+  height: 28px;
+  padding: 0 14px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxs-strong-12);
+  cursor: pointer;
+}
+
+.uploadOverlayCancel:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  border-color: var(--dsw-alias-border-l2);
+}
+
+.uploadOverlayCancel:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* ── Editor ────────────────────────────────────────────────────────────── */
 
 .editor {
@@ -769,7 +1074,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
 }
 
@@ -788,6 +1093,7 @@
 .editorPathInput {
   flex: 1;
   min-width: 0;
+  box-sizing: border-box;
   height: 28px;
   padding: 0 10px;
   border: 1px solid var(--dsw-alias-border-l1);
@@ -852,6 +1158,8 @@
 }
 
 .editorTreePanel {
+  /* Relative so the upload overlay and drop pill can cover the tree exactly. */
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -868,7 +1176,7 @@
   flex: none;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   padding: 6px 8px;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
 }
@@ -1001,7 +1309,7 @@
 
 .editorBanner {
   flex: none;
-  padding: 4px 12px;
+  padding: 4px 8px;
   font: var(--dsw-font-xxxs-11);
   color: var(--dsw-alias-state-warn-label);
   background: var(--dsw-alias-state-warn-tertiary);
@@ -1204,6 +1512,12 @@
   height: 100%;
 }
 
+/* Code lines get the same 12/16 inset as the markdown preview, so toggling
+   preview/edit never jumps the text's resting position. */
+.editorCm :global(.cm-scroller) {
+  padding: 12px 16px;
+}
+
 .editorCm :global(.cm-editor.cm-focused) {
   outline: none;
 }
@@ -1259,7 +1573,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px 14px;
+  padding: 12px 16px;
   font: var(--dsw-font-xs-13);
 }
 
@@ -1688,6 +2002,20 @@
   padding: 0 8px 0 12px;
 }
 
+.gitWorktreeRow {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 0 12px;
+}
+
+.gitWorktreeLabel {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxxs-11);
+}
+
 .gitBranchSelect {
   flex: 1;
   min-width: 0;
@@ -1846,10 +2174,34 @@
 
 /* One changed file's section: path header, hunk headers, aligned lines. */
 .gitDiffFile {
+  width: 100%;
   display: flex;
   align-items: baseline;
   gap: 6px;
   padding: 8px 2px 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.gitDiffFile:disabled {
+  cursor: default;
+}
+
+.gitDiffFile:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.gitDiffFileChevron {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  transform: rotate(0deg);
+}
+
+.gitDiffFileChevronExpanded {
+  transform: rotate(90deg);
 }
 
 .gitDiffFilePath {
@@ -2141,7 +2493,6 @@
 
 /* Keyboard focus stays visible on every interactive control (the styling
    policy requires focus visibility; the accent token doubles as the ring). */
-.toggleButton:focus-visible,
 .bottomClose:focus-visible,
 .iconButton:focus-visible,
 .tab:focus-visible,
@@ -2155,6 +2506,7 @@
 .gitCommitButton:focus-visible,
 .gitLogRow:focus-visible,
 .gitLogMore:focus-visible,
+.gitDiffFile:focus-visible,
 .gitDiffExpand:focus-visible,
 .terminalRetry:focus-visible,
 .editorModeButton:focus-visible,
@@ -2171,8 +2523,6 @@
   .panelHidden,
   .bottomPanel,
   .bottomPanelHidden,
-  .toggleCluster,
-  .toggleButton,
   .tab,
   .tabBarPlus,
   .paneCard,
@@ -2191,9 +2541,9 @@
 /* Pairs with NARROW_MAX_WIDTH = 768 in src/client/breakpoints.ts: widths
    strictly below 768px (i.e. max-width: 767px) switch the sidebar to the
    mobile layout — one full-screen drawer (the bottom panel's tabs were
-   migrated into the right tree), one toggle button. The structural
-   switches (which panels render, the migration) are JS-driven via
-   useNarrowViewport; this block only adapts the pure style details. */
+   migrated into the right tree). The structural switches (which panels
+   render, the migration) are JS-driven via useNarrowViewport; this block
+   only adapts the pure style details. */
 @media (max-width: 767px) {
   /* Narrower tabs: a phone-width drawer fits more open tabs before the
      strip scrolls. */
@@ -2201,4 +2551,187 @@
     min-width: 48px;
     max-width: 128px;
   }
+}
+
+/* The file tree "open with" menu rows: the label area is a BLOCK-level flex
+   row that fills the primitives `.itemLabel` span (which is itself `flex: 1`
+   inside the row), so the trailing control — the pushpin on submenu rows,
+   the chevron on the submenu parent — docks at the row's far right, exactly
+   like the trailing check on selected rows of every other menu. */
+.openWithLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.openWithName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The trailing "expands into a submenu" chevron on the open-with parent row
+   (the primitives Menu renders no arrow for submenu parents). */
+.openWithChevron {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* The pushpin toggle on an "open with" submenu row: brand ink once the
+   target is pinned to the menu's top level. */
+.openWithPin {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.openWithPin:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.openWithPinActive {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+/* ── Markdown preview: raw-HTML runs + table of contents ─────────────────
+   The HTML runs lifted out of the markdown source (MarkdownHtml.tsx) render
+   as sanitized block leaves; the TOC is a zero-height sticky bar keeping the
+   outline button pinned at the preview's top-right without consuming layout.
+   All visuals ride the alias tokens (skin system follows automatically). */
+
+/* A sanitized HTML run leaf (block-level box; content is DOMPurify output). */
+.editorHtmlBlock {
+  margin: 8px 0;
+}
+
+.editorHtmlBlock img,
+.editorHtmlBlock video {
+  max-width: 100%;
+}
+
+.editorHtmlBlock details {
+  margin: 4px 0;
+  padding: 4px 0;
+}
+
+.editorHtmlBlock summary {
+  cursor: pointer;
+}
+
+/* The zero-height sticky bar: occupies no layout, keeps the button visible
+   while the preview scrolls, and lets pointer events pass through the bar
+   itself (only the interactive children re-enable them). */
+.tocBar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  justify-content: flex-end;
+  height: 0;
+  pointer-events: none;
+}
+
+.tocButton {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin: 4px 2px 0 0;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.tocButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The outline popover, anchored under the button (the bar is the containing
+   block; its height is 0, so the panel drops below the pinned button row). */
+.tocPanel {
+  position: absolute;
+  top: 32px;
+  right: 2px;
+  display: flex;
+  flex-direction: column;
+  width: min(300px, 82%);
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  box-shadow: var(--dsw-shadow-lv2);
+  pointer-events: auto;
+}
+
+.tocItem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tocItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Indent by heading level (h2 = one step, h3 = two steps…). */
+.tocItem[data-level='2'] { padding-left: 18px; }
+.tocItem[data-level='3'] { padding-left: 28px; }
+.tocItem[data-level='4'] { padding-left: 38px; }
+.tocItem[data-level='5'] { padding-left: 48px; }
+.tocItem[data-level='6'] { padding-left: 58px; }
+
+/* The tiny level number keeps deep outlines scannable. */
+.tocItemLevel {
+  flex: none;
+  font: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.tocItemText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The jumped-to heading flashes once (the class is added to the host-rendered
+   heading element by md-toc.tsx; @keyframes rides the CSS module). */
+@keyframes dsh-toc-flash {
+  0%, 60% { background: var(--dsw-alias-interactive-bg-hover); }
+  100% { background: transparent; }
+}
+
+.tocFlash {
+  animation: dsh-toc-flash 1.2s ease-out;
+  border-radius: 4px;
 }

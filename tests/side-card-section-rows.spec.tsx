@@ -19,7 +19,9 @@ import { act } from 'react-dom/test-utils'
 // The act() environment flag (React 18.2 reads it before flushing effects).
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 import type { SidebarSettingToggle } from '../src/client/service.ts'
-import { FeatureSettingsRows } from '../src/client/SideCardSection.tsx'
+import { createBetterSidebarService } from '../src/client/service.ts'
+import { FeatureSettingsRows, SettingsBody } from '../src/client/SideCardSection.tsx'
+import { createSidebarStore } from '../src/client/state.ts'
 import { SIDEBAR_PREFS_DEFAULTS } from '../src/prefs-shared.ts'
 
 /** Render the rows into a detached container under React's act(). */
@@ -172,6 +174,41 @@ describe('FeatureSettingsRows typed rows (interactive)', () => {
       onCommit: (_t, raw) => raw,
     }))
     expect(container.querySelector('input')!.value).toBe('Old')
+    unmount()
+  })
+})
+
+describe('dependent bottom-workbench settings', () => {
+  it('hides only bottomPanelAutoTerminal while the bottom workbench is disabled', () => {
+    const store = createSidebarStore()
+    const service = createBetterSidebarService(store)
+    const feature = {
+      id: 'terminal',
+      title: 'Terminal',
+      component: () => null,
+      settings: {
+        toggles: [
+          { key: 'bottomPanelAutoTerminal', title: 'Auto bottom terminal' },
+          { key: 'terminalFontFamily', type: 'text' as const, title: 'Terminal font' },
+        ],
+      },
+    }
+    const { container, unmount } = mount(createElement(SettingsBody, {
+      feature,
+      prefs: { ...SIDEBAR_PREFS_DEFAULTS, bottomPanelEnabled: false },
+      store,
+      service,
+      onToggle: () => {},
+      onCommit: (_toggle, raw) => raw,
+      onSelectValue: () => {},
+      onPluginToggle: () => {},
+      onPluginCommit: (_toggle, raw) => raw,
+      onPluginSelectValue: () => {},
+      onPluginWrite: () => {},
+      onClose: () => {},
+    }))
+    expect(container.textContent).not.toContain('Auto bottom terminal')
+    expect(container.textContent).toContain('Terminal font')
     unmount()
   })
 })

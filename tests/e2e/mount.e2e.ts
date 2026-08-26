@@ -13,7 +13,8 @@
  *     lives inside the official `right-sidebar` region;
  *  3. asserts the plugin's crash markers never appear (no RenderBoundary /
  *     fail() strips, no `pageerror`, no plugin-prefixed console errors);
- *  4. opens the official fourth track from `shell.overlay`, sweeps every
+ *  4. opens the official fourth track from the Host-owned layout action,
+ *     proves `shell.overlay` contains only the free-window layer, sweeps every
  *     built-in tab (Files / Source Control / Tasks / Terminal / Browser) —
  *     including the lazily-fetched terminal chunk — and then opens seeded
  *     files through the Files window's tree (separate mode: each file opens
@@ -48,6 +49,11 @@ const SEEDED_FILE = 'hello.txt'
  *  and render a sanitized SVG diagram. */
 const SEEDED_MD_FILE = 'diagram.md'
 
+/** A GitHub-style README markdown (badge div, <details> nesting markdown,
+ *  inline tags in table cells), opened through the Files window's tree to
+ *  prove raw-HTML runs render as sanitized DOM and the TOC outline works. */
+const SEEDED_README_FILE = 'readme-style.md'
+
 /**
  * The plugin's crash markers. The client mounts inside an error boundary that
  * renders a strip whose text starts with these prefixes instead of crashing
@@ -56,9 +62,115 @@ const SEEDED_MD_FILE = 'diagram.md'
 const CRASH_STRIP_PATTERNS = [/^dsh-better-sidebar:/, /^\[dsh-better-sidebar\]/]
 
 /** Built-in tab titles the sweep drives (en-US copy; follows DSH locale). */
-const BUILTIN_TABS = ['Files', 'Source Control', 'Tasks', 'Terminal', 'Browser']
+const BUILTIN_TABS = ['Files', 'Source Control', 'Tasks', 'Side Chat (beta)', 'Terminal', 'Browser']
+
+/** Deterministic Side Chat transcript used only by the visual parity fixture. */
+const SIDECHAT_VISUAL_EVENTS = [
+  { event: { type: 'session/end-seed', seq: 0, time: 0, data: {} } },
+  {
+    event: {
+      type: 'user/message',
+      seq: 1,
+      time: 1_000,
+      surfaceOp: 'append',
+      data: {
+        content: [{ type: 'text', text: '# Keep **Markdown** literal' }],
+        source: { kind: 'user' },
+      },
+    },
+  },
+  { event: { type: 'turn/start', seq: 2, time: 2_000, data: { turn: 1 } } },
+  { event: { type: 'step/start', seq: 3, time: 3_000, data: { turn: 1, step: 1 } } },
+  {
+    event: {
+      type: 'assistant/message',
+      seq: 4,
+      time: 4_000,
+      surfaceOp: 'append',
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          content: [
+            { type: 'reasoning', text: 'Compare the shared conversation rhythm before answering.' },
+            {
+              type: 'text',
+              text: [
+                '## Shared presentation',
+                '',
+                'Assistant Markdown keeps a compact paragraph rhythm.',
+                '',
+                '- one list item',
+                '- another list item',
+                '',
+                '| Surface | Owner |',
+                '| --- | --- |',
+                '| Markdown | DSH |',
+                '| Layout | Side Chat |',
+                '',
+                '```ts',
+                'const density = "conversation"',
+                '```',
+              ].join('\n'),
+            },
+          ],
+        },
+      },
+    },
+  },
+  {
+    event: {
+      type: 'user/message',
+      seq: 5,
+      time: 5_000,
+      surfaceOp: 'append',
+      data: {
+        content: [{ type: 'text', text: 'Pinned context for the visual fixture.' }],
+        source: { kind: 'plugin', plugin: 'sidechat-visual-fixture' },
+      },
+    },
+  },
+  {
+    event: {
+      type: 'tool/call',
+      seq: 6,
+      time: 6_000,
+      data: {
+        turn: 1,
+        step: 1,
+        callId: 'fixture-call',
+        name: 'read',
+        arguments: '{"path":"src/client/SideChatView.tsx"}',
+      },
+    },
+  },
+  {
+    event: {
+      type: 'tool/result',
+      seq: 7,
+      time: 7_000,
+      surfaceOp: 'append',
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          source: { kind: 'tool', callId: 'fixture-call' },
+          content: [{
+            type: 'tool-result',
+            toolCallId: 'fixture-call',
+            isError: false,
+            content: [{ type: 'text', text: 'export function SideChatView() { /* fixture */ }' }],
+          }],
+        },
+      },
+    },
+  },
+  { event: { type: 'turn/end', seq: 8, time: 8_000, data: { turn: 1, reason: { kind: 'completed' } } } },
+]
 
 let api: APIRequestContext
+/** The seeded session id (captured by seedSession; the Side Chat smoke's parent). */
+let seededSessionId: string
 
 /** Seed one workspace + one session (plus files for the editor/mermaid-chunk
  *  probes) through the host's unary RPC surface. */
@@ -85,6 +197,41 @@ async function seedSession(): Promise<void> {
     'tail text',
     '',
   ].join('\n'))
+  // The README-style probe file: raw-HTML runs (badge wall div with an
+  // embedded script, a <details> nesting a fence + heading) plus inline tags
+  // inside a table cell. The script must be sanitized away in the preview.
+  writeFileSync(join(WORKSPACE_PATH, SEEDED_README_FILE), [
+    '# Readme Style',
+    '',
+    '<div align="center">',
+    '  <img alt="badge" src="https://img.shields.io/badge/x-y-blue" />',
+    '  <script>alert(1)</script>',
+    '</div>',
+    '',
+    '## Setup',
+    '',
+    '[docs link][def]',
+    '',
+    '<details>',
+    '<summary><b>Steps</b></summary>',
+    '',
+    '### Inside',
+    '',
+    '```sh',
+    'dsh plugin --profile web add x',
+    '```',
+    '',
+    '</details>',
+    '',
+    '## Table',
+    '',
+    '| col | note |',
+    '| --- | --- |',
+    '| alpha | line one<br/>line two |',
+    '',
+    '[def]: https://example.com/def',
+    '',
+  ].join('\n'))
   const workspace = await api.post(`${BASE_URL}/api/workspace.create`, {
     data: { type: 'client-request', rpcId: 'e2e-workspace', method: 'workspace.create', payload: { path: WORKSPACE_PATH } },
   })
@@ -99,6 +246,11 @@ async function seedSession(): Promise<void> {
     data: { type: 'client-request', rpcId: 'e2e-session', method: 'session.create', payload: { workspaceId } },
   })
   expect(session.ok(), `session.create: ${session.status()} ${await session.text()}`).toBe(true)
+  const sessionBody = (await session.json()) as {
+    result: { ok: true; value: { sessionId: string } } | { ok: false; error: unknown }
+  }
+  expect(sessionBody.result.ok).toBe(true)
+  seededSessionId = (sessionBody.result as { value: { sessionId: string } }).value.sessionId
 }
 
 test.beforeAll(async () => {
@@ -134,6 +286,9 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
   const sidebar = page.locator('[data-layout-region="right-sidebar"] [data-dsh-better-sidebar]')
   await expect(sidebar).toBeAttached({ timeout: 90_000 })
   await expect(page.locator('body > [data-dsh-better-sidebar]')).toHaveCount(0)
+  await expect(page.locator('[data-shell-overlay] [data-dsh-better-sidebar-overlay]')).toHaveCount(1)
+  await expect(page.locator('[data-shell-overlay] [data-dsh-better-sidebar-toggles]')).toHaveCount(0)
+  await expect(page.locator('[data-shell-overlay] [data-dsh-toggle-cluster]')).toHaveCount(0)
 
   // A keyless boot stacks onboarding takeovers that mask the whole shell: a
   // versioned welcome notice ("Continue", persists its acknowledgement to
@@ -168,20 +323,36 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
     if (!dismissed) break
   }
 
-  // The seeded session must give the sidebar a session scope: without it the
-  // shell renders a disabled toggle cluster and the tab sweep is impossible.
+  // The seeded session gives the occupant a real scope for the tab sweep.
   const tabBar = sidebar.locator('[title]')
   await expect(tabBar.first()).toBeAttached({ timeout: 90_000 })
 
-  // openByDefault defaults OFF. The shell-overlay control remains clickable
-  // while the fourth track is zero; opening must narrow the official
-  // conversation track and expose only the AppFrame's resize handle.
-  const toggles = page.locator('[data-shell-overlay] [data-dsh-better-sidebar-toggles]')
-  const expandButton = toggles.getByRole('button', { name: 'Expand sidebar' })
-  await expect(expandButton, 'shell.overlay must offer the collapsed right-sidebar toggle').toHaveCount(1)
+  // openByDefault defaults OFF. The plugin action lives in the Host-owned
+  // persistent header seat (not shell.overlay), including its real aria
+  // state. Opening narrows the conversation track and exposes the AppFrame
+  // resize handle.
+  const layoutActions = page.locator('[data-conversation-header-frame] [data-layout-actions]')
+  const expandButton = layoutActions.getByRole('button', { name: 'Expand sidebar' })
+  await expect(expandButton, 'the Host layout-action seat must offer the collapsed right-sidebar action').toHaveCount(1)
+  await expect(expandButton).toHaveAttribute('aria-expanded', 'false')
   const conversation = page.locator('[data-layout-region="conversation"]')
   const closedConversationWidth = await conversation.evaluate(element => element.getBoundingClientRect().width)
+  // A collapsed official track and the overlay surface must not enlarge the
+  // document. This protects the shell from regressions in float/toggle
+  // positioning without depending on the deleted plugin-owned panel host.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => ({
+          overflowX: document.documentElement.scrollWidth <= window.innerWidth,
+          overflowY: document.documentElement.scrollHeight <= window.innerHeight,
+        })),
+      { timeout: 30_000 },
+    )
+    .toEqual({ overflowX: true, overflowY: true })
   await expandButton.click()
+  const collapseButton = layoutActions.getByRole('button', { name: 'Collapse sidebar' })
+  await expect(collapseButton).toHaveAttribute('aria-expanded', 'true')
   await expect(page.locator('[data-side="right-sidebar"]'), 'the official fourth-track handle must be present').toHaveCount(1)
   await expect.poll(
     () => conversation.evaluate(element => element.getBoundingClientRect().width),
@@ -192,11 +363,11 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
   // Closing returns the fourth track to zero without removing the overlay
   // entry; reopen once more so the built-in sweep below exercises the same
   // user path a collapsed desktop user has.
-  const collapseButton = toggles.getByRole('button', { name: 'Collapse sidebar' })
   await expect(collapseButton).toHaveCount(1)
   await collapseButton.click()
   await expect(page.locator('[data-side="right-sidebar"]')).toHaveCount(0)
   await expect(expandButton).toHaveCount(1)
+  await expect(expandButton).toHaveAttribute('aria-expanded', 'false')
   await expect.poll(
     () => conversation.evaluate(element => element.getBoundingClientRect().width),
     { timeout: 90_000 },
@@ -240,6 +411,72 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
     await page.waitForTimeout(1_500)
     await assertNoCrash()
   }
+
+  // Side Chat host-route smoke against the REAL host: create a thread child
+  // under the seeded session (custom-seed creation through AgentRegistry),
+  // deliver a follow-up, cancel, and release it. The turn itself cannot run
+  // (keyless boot has no model route), but admission + creation + the wire
+  // envelope must all succeed — this is the deepest functional proof the
+  // mount lane can make without a provider.
+  const start = await api.post(`${BASE_URL}/sidebar/api/sidechat.start`, {
+    data: { sessionId: seededSessionId, question: 'mount lane smoke' },
+  })
+  expect(start.ok(), `sidechat.start: ${start.status()} ${await start.text()}`).toBe(true)
+  const startBody = (await start.json()) as {
+    ok: boolean
+    value?: { childId?: string }
+    error?: { code?: string; message?: string }
+  }
+  expect(startBody.ok, `sidechat.start envelope: ${JSON.stringify(startBody)}`).toBe(true)
+  const childId = startBody.value?.childId
+  expect(childId, 'sidechat.start must return a child session id').toMatch(/^session-/)
+  // The child must be a REAL session in the host's store (provider-free
+  // proof of the custom-seed creation; the boundary message itself only
+  // becomes durable when a turn claims it, which needs a model route).
+  const list = await api.post(`${BASE_URL}/api/session.list`, {
+    data: { type: 'client-request', rpcId: 'e2e-sidechat-list', method: 'session.list', payload: {} },
+  })
+  expect(list.ok(), `session.list: ${list.status()} ${await list.text()}`).toBe(true)
+  const listBody = (await list.json()) as {
+    result: { ok: true; value: { items: Array<{ sessionId: string }> } } | { ok: false; error: unknown }
+  }
+  expect(listBody.result.ok, `session.list envelope: ${JSON.stringify(listBody)}`).toBe(true)
+  const listedItems = (listBody.result as { value: { items: Array<{ sessionId: string }> } }).value.items
+  expect(
+    listedItems.some(item => item.sessionId === childId),
+    'the thread child must appear in the host session list',
+  ).toBe(true)
+  for (const method of ['sidechat.prompt', 'sidechat.cancel', 'sidechat.dispose']) {
+    const response = await api.post(`${BASE_URL}/sidebar/api/${method}`, {
+      data: method === 'sidechat.prompt' ? { childId, text: 'follow-up' } : { childId },
+    })
+    expect(response.ok(), `${method}: ${response.status()} ${await response.text()}`).toBe(true)
+  }
+
+  // The Codex-style immediate-create flow: a blank question creates an
+  // EMPTY thread (no prompt admitted), sidechat.info reports the live
+  // agent, and the first prompt delivers the boundary host-side.
+  const empty = await api.post(`${BASE_URL}/sidebar/api/sidechat.start`, {
+    data: { sessionId: seededSessionId, question: '' },
+  })
+  expect(empty.ok(), `sidechat.start (empty): ${empty.status()} ${await empty.text()}`).toBe(true)
+  const emptyBody = (await empty.json()) as { ok: boolean; value?: { childId?: string } }
+  const emptyChildId = emptyBody.value?.childId
+  expect(emptyChildId, 'immediate create must return a child session id').toMatch(/^session-/)
+  const info = await api.post(`${BASE_URL}/sidebar/api/sidechat.info`, {
+    data: { childId: emptyChildId },
+  })
+  expect(info.ok(), `sidechat.info: ${info.status()} ${await info.text()}`).toBe(true)
+  const infoBody = (await info.json()) as { ok: boolean; value?: { live?: boolean; preset?: string } }
+  expect(infoBody.ok, `sidechat.info envelope: ${JSON.stringify(infoBody)}`).toBe(true)
+  expect(infoBody.value?.live, 'the fresh thread must have a live agent').toBe(true)
+  for (const method of ['sidechat.prompt', 'sidechat.dispose']) {
+    const response = await api.post(`${BASE_URL}/sidebar/api/${method}`, {
+      data: method === 'sidechat.prompt' ? { childId: emptyChildId, text: 'first message' } : { childId: emptyChildId },
+    })
+    expect(response.ok(), `${method} (immediate thread): ${response.status()} ${await response.text()}`).toBe(true)
+  }
+  await assertNoCrash()
 
   // The editor chunk (client-editor.js) only loads when a files-window tab
   // renders. Exercise the file-open path explicitly through the Files window's
@@ -344,6 +581,75 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
   ).toBeHidden()
   await assertNoCrash()
 
+  // README-style markdown (raw-HTML runs + TOC): open the seeded file and
+  // require the full round-trip — sanitized HTML leaves (badge image as a
+  // real element, active content stripped), markdown nested inside the
+  // unclosed <details> run, the inline pass turning the table cell's <br/>
+  // into an element, the reference link resolving across the HTML run, and
+  // the TOC outline jumping into the collapsed details (auto-expanding it).
+  await sidebar.locator('[title="Files"][draggable="true"]').first().click()
+  const readmeRow = sidebar.locator(`[role="button"][title$="${SEEDED_README_FILE}"]:visible`)
+  await expect(
+    readmeRow,
+    `the seeded "${SEEDED_README_FILE}" file must appear in the files window's tree`,
+  ).toHaveCount(1, { timeout: 30_000 })
+  await readmeRow.click({ position: { x: 8, y: 8 } })
+  await expect(
+    sidebar.locator(`[title="${SEEDED_README_FILE}"][draggable="true"]`),
+    'separate mode opens a new tab for the README-style markdown file',
+  ).toHaveCount(1, { timeout: 30_000 })
+  // The hero div renders as a sanitized leaf with the badge image as a real
+  // element (the remote src may not load in the sandboxed lane; the ELEMENT
+  // is the proof of rendering, not the bytes).
+  await expect(
+    sidebar.locator('[data-dsh-html-segment] img[src*="img.shields.io"]'),
+    'the badge-wall div must render its image as a real element',
+  ).toHaveCount(1, { timeout: 30_000 })
+  // Active content never survives sanitization.
+  await expect(
+    sidebar.locator('script'),
+    'the embedded <script> must be sanitized away',
+  ).toHaveCount(0)
+  // The unclosed <details> run lowers the following markdown inside itself.
+  const details = sidebar.locator('details')
+  await expect(
+    details,
+    'the details run must render as a real element',
+  ).toHaveCount(1, { timeout: 30_000 })
+  await expect(details.locator('summary'), 'the details summary must render').toHaveCount(1)
+  await expect(
+    details.locator('h3', { hasText: 'Inside' }),
+    'the heading between the details tags must nest inside the element',
+  ).toHaveCount(1)
+  // The inline pass: the table cell's literal <br/> became a real element.
+  await expect(
+    sidebar.locator('[data-html-inline] br'),
+    'the table cell <br/> must render as a real element',
+  ).toHaveCount(1, { timeout: 30_000 })
+  // The reference link resolves although its definition sits after an HTML run.
+  await expect(
+    sidebar.locator('a[href="https://example.com/def"]'),
+    'reference links must resolve across lifted HTML runs',
+  ).toHaveCount(1, { timeout: 30_000 })
+  // TOC: the outline button appears (4 headings), opens the panel, and
+  // jumping into the collapsed details expands it.
+  const tocButton = sidebar.locator('[data-dsh-md-toc]')
+  await expect(
+    tocButton,
+    'the TOC button must appear once the document has enough headings',
+  ).toHaveCount(1, { timeout: 30_000 })
+  await tocButton.click()
+  const tocPanel = sidebar.locator('[data-dsh-md-toc-panel]')
+  await expect(tocPanel, 'the TOC panel must open').toHaveCount(1)
+  const insideItem = tocPanel.locator('button', { hasText: 'Inside' })
+  await expect(insideItem, 'the nested heading must appear in the outline').toHaveCount(1)
+  await insideItem.click()
+  await expect(
+    details,
+    'jumping into a collapsed details must expand it',
+  ).toHaveAttribute('open', '')
+  await assertNoCrash()
+
   // The plugin's own console prefix must never appear in errors, and no
   // unhandled rejection may escape the sweep.
   const pluginErrors = consoleErrors.filter((text) => /dsh-better-sidebar|Unhandled/.test(text))
@@ -352,4 +658,249 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
 
   // Final screenshot: the rendered panel with a session is the lane's proof.
   await page.screenshot({ path: 'test-results/mount-final.png' })
+})
+
+test('Side Chat visual fixture matches shared conversation presentation at 320px and 420px', async ({ page }) => {
+  test.setTimeout(240_000)
+  const pageErrors: string[] = []
+  const consoleErrors: string[] = []
+  page.on('pageerror', error => pageErrors.push(String(error)))
+  page.on('console', message => {
+    if (message.type() === 'error') consoleErrors.push(message.text())
+  })
+
+  await page.route('**/api/session.history', async (route) => {
+    const body = route.request().postDataJSON() as {
+      rpcId?: string
+      payload?: { sessionId?: string }
+    }
+    if (body.payload?.sessionId === seededSessionId) {
+      await route.continue()
+      return
+    }
+    await route.fulfill({
+      json: {
+        type: 'server-response',
+        rpcId: body.rpcId,
+        result: { ok: true, value: { events: SIDECHAT_VISUAL_EVENTS, hasMore: false } },
+      },
+    })
+  })
+
+  const setDockedWidth = async (width: 320 | 420): Promise<void> => {
+    const region = page.locator('[data-layout-region="right-sidebar"]')
+    const handle = page.locator('[data-side="right-sidebar"]')
+    const currentWidth = await region.evaluate(element => element.getBoundingClientRect().width)
+    const box = await handle.boundingBox()
+    expect(box, 'official right-sidebar resize handle').not.toBeNull()
+    const x = box!.x + box!.width / 2
+    const y = box!.y + Math.min(120, box!.height / 2)
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x + currentWidth - width, y, { steps: 8 })
+    await page.mouse.up()
+    await expect.poll(
+      () => region.evaluate(element => Math.round(element.getBoundingClientRect().width)),
+      { timeout: 30_000 },
+    ).toBe(width)
+  }
+
+  for (const theme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' })
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('#root > *')).not.toHaveCount(0, { timeout: 90_000 })
+
+    try {
+      await expect
+        .poll(() => page.getByRole('button', { name: /^(Continue|Configure later)$/ }).count(), { timeout: 60_000 })
+        .toBeGreaterThan(0)
+    } catch {
+      console.warn('[e2e] no onboarding takeover appeared; proceeding without dismissal')
+    }
+    for (let round = 0; round < 8; round++) {
+      let dismissed = false
+      for (const name of ['Continue', 'Configure later']) {
+        const button = page.getByRole('button', { name, exact: true }).first()
+        if ((await button.count()) === 0) continue
+        try {
+          await button.click({ timeout: 4_000 })
+          dismissed = true
+          await page.waitForTimeout(500)
+        } catch {
+          // Another onboarding layer is above this one; retry next round.
+        }
+      }
+      if (!dismissed) break
+    }
+
+    const sidebar = page.locator('[data-layout-region="right-sidebar"] [data-dsh-better-sidebar]')
+    await expect(sidebar).toBeAttached({ timeout: 90_000 })
+    const layoutActions = page.locator('[data-layout-actions]')
+    const layoutAction = layoutActions.getByRole('button', { name: /^(Expand|Collapse) sidebar$/ })
+    await expect(layoutAction, 'Host-owned sidebar layout action').toHaveCount(1)
+    const expand = layoutActions.getByRole('button', { name: 'Expand sidebar', exact: true })
+    if ((await expand.count()) === 1) await expand.click()
+    await expect(layoutActions.getByRole('button', { name: 'Collapse sidebar', exact: true })).toHaveCount(1)
+    await expect(page.locator('[data-side="right-sidebar"]')).toHaveCount(1)
+
+    const newTab = sidebar.getByRole('button', { name: 'New tab', exact: true }).first()
+    await newTab.click()
+    await page.getByRole('menuitem', { name: 'Side Chat (beta)', exact: true }).first().click()
+
+    const surface = sidebar.locator('[data-sidechat-surface]:visible')
+    await expect(surface).toBeVisible({ timeout: 30_000 })
+    await expect(surface.getByText('# Keep **Markdown** literal', { exact: true })).toBeVisible()
+    await expect(surface.getByText('Shared presentation', { exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('body[data-ds-dark-theme]')).toHaveCount(theme === 'dark' ? 1 : 0)
+
+    for (const name of [/^Thinking$/, /^Context injected$/, /^read/]) {
+      await surface.getByRole('button', { name }).click()
+    }
+    // Markdown root + fenced code + context code + tool code all expose the
+    // public conversation density at runtime. The paired-result branch is
+    // covered by the focused component test; this fixed fixture keeps one
+    // tool surface visible at both narrow widths.
+    await expect(surface.locator('[data-density="conversation"]')).toHaveCount(4)
+
+    await page.addStyleTag({ content: [
+      '*, *::before, *::after { animation: none !important; transition: none !important; }',
+      'textarea { caret-color: transparent !important; }',
+    ].join('\n') })
+
+    for (const width of [320, 420] as const) {
+      await setDockedWidth(width)
+      await expect(surface).toHaveScreenshot(`sidechat-${theme}-${width}.png`, {
+        animations: 'disabled',
+        caret: 'hide',
+        mask: [surface.locator('[data-sidechat-nondeterministic]')],
+        maxDiffPixelRatio: 0.01,
+      })
+    }
+  }
+
+  expect(consoleErrors, 'console errors during the Side Chat visual fixture').toEqual([])
+  expect(pageErrors, 'pageerrors during the Side Chat visual fixture').toEqual([])
+})
+
+test('conservative auto: URL stamps alone never modify the layout; plugin chrome carries the stable data attributes', async ({ page }) => {
+  // The official DSH Desktop shell stamps every render URL with
+  // dsh-desktop-mode / dsh-desktop-platform. Under the conservative AUTO
+  // scheme, shell stamps are REPORTS, not geometry: without the standard
+  // Window Controls Overlay API the layout must stay untouched (plain-web
+  // semantics) — the strip/body attribute appear only for real standard
+  // geometry (see the WCO scenario below) or an opt-in preset.
+  await page.goto(`${BASE_URL}?dsh-desktop-mode=advanced&dsh-desktop-platform=win32`, { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('[data-dsh-better-sidebar]')).toBeAttached({ timeout: 90_000 })
+  await expect(
+    page.locator('body[data-dsh-title-bar-compat]'),
+    'stamps alone must NOT auto-enable title-bar compatibility under auto',
+  ).toHaveCount(0)
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue('--dsh-title-bar-strip')))
+    .toBe('')
+  // The free-window layer remains the overlay addressing surface; legacy
+  // toggle-cluster markers must not return through this compatibility lane.
+  await expect(page.locator('[data-shell-overlay] [data-dsh-better-sidebar-overlay]')).toBeAttached()
+  await expect(page.locator('[data-dsh-toggle-cluster]')).toHaveCount(0)
+  await expect(page.locator('[data-dsh-better-sidebar-toggles]')).toHaveCount(0)
+  await expect(page.locator('[data-dsh-panel]').first()).toBeAttached()
+  // The plugin's interactive chrome opts out of Electron drag regions
+  // (issues #103/#111) — inert in plain browsers, present in the bundle
+  // (the bundler minifies the property's whitespace, so match loosely).
+  const hasNoDragRule = await page.evaluate(() => {
+    for (const tag of document.querySelectorAll('style')) {
+      if (tag.textContent !== null && /-webkit-app-region:\s*no-drag/.test(tag.textContent)) return true
+    }
+    return false
+  })
+  expect(hasNoDragRule, 'the bundle must ship the drag-region opt-out rule').toBe(true)
+})
+
+test('standard WCO geometry drives the strip reactively (issue #257)', async ({ page }) => {
+  // The Window Controls Overlay API is the STANDARD signal for shells that
+  // draw the native caption buttons over web content (Electron
+  // `titleBarOverlay`). Mock it with the real API shape: the strip must
+  // follow the reported rect and react to geometrychange (maximize/restore).
+  await page.addInitScript(() => {
+    const rect = { x: 0, y: 0, width: 138, height: 36 }
+    const listeners = new Set<() => void>()
+    Object.defineProperty(navigator, 'windowControlsOverlay', {
+      configurable: true,
+      value: {
+        visible: true,
+        getTitlebarAreaRect: () => ({ ...rect }),
+        addEventListener: (type: string, listener: () => void) => { if (type === 'geometrychange') listeners.add(listener) },
+        removeEventListener: (type: string, listener: () => void) => { if (type === 'geometrychange') listeners.delete(listener) },
+      },
+    })
+    ;(globalThis as { __wcoMock?: { setHeight: (height: number) => void } }).__wcoMock = {
+      setHeight: (height: number) => {
+        rect.height = height
+        for (const listener of listeners) listener()
+      },
+    }
+  })
+  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('[data-dsh-better-sidebar]')).toBeAttached({ timeout: 90_000 })
+  // Real reported height (36px, not a hardcoded 32) drives the strip.
+  await expect(page.locator('body[data-dsh-title-bar-compat]')).toBeAttached({ timeout: 90_000 })
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue('--dsh-title-bar-strip')))
+    .toBe('36px')
+  // Maximize → the overlay reports a zero rect → the strip is removed.
+  await page.evaluate(() => (globalThis as { __wcoMock?: { setHeight: (height: number) => void } }).__wcoMock?.setHeight(0))
+  await expect(page.locator('body[data-dsh-title-bar-compat]')).toHaveCount(0)
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue('--dsh-title-bar-strip')))
+    .toBe('')
+  // Restore → the strip comes back.
+  await page.evaluate(() => (globalThis as { __wcoMock?: { setHeight: (height: number) => void } }).__wcoMock?.setHeight(36))
+  await expect(page.locator('body[data-dsh-title-bar-compat]')).toBeAttached()
+})
+
+test('opt-in shell preset applies its strip when WCO is absent (data-driven, manual)', async ({ request, page }) => {
+  // The anywhere-labs DSH Desktop preset (shell-presets.ts) is OPT-IN: under
+  // the preset scheme the win32 advanced stamp resolves to its 32px fallback
+  // even without the WCO API; auto never does this.
+  const update = await request.post(`${BASE_URL}/sidebar/api/settings.update`, {
+    data: { patch: { titleBarScheme: 'preset', titleBarPresetId: 'dsh-desktop', titleBarCompat: true } },
+  })
+  expect(update.ok(), `settings.update: ${update.status()}`).toBe(true)
+  try {
+    await page.goto(`${BASE_URL}?dsh-desktop-mode=advanced&dsh-desktop-platform=win32`, { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('[data-dsh-better-sidebar]')).toBeAttached({ timeout: 90_000 })
+    await expect(page.locator('body[data-dsh-title-bar-compat]')).toBeAttached({ timeout: 90_000 })
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue('--dsh-title-bar-strip')))
+      .toBe('32px')
+    // The v1 anywhere-labs preset is PURE STRIP DATA (no extra CSS — the
+    // injection mechanism is exercised by the custom-scheme test). Assert
+    // the absence explicitly: a future preset that ADDS css would trip
+    // here instead of silently shipping unstyled.
+    await expect(page.locator('style[data-dsh-preset-css]')).toHaveCount(0)
+  } finally {
+    // Restore the shared server state for the lanes after this one.
+    await request.post(`${BASE_URL}/sidebar/api/settings.update`, {
+      data: { patch: { titleBarScheme: 'auto', titleBarPresetId: '', customCss: '', titleBarCompat: false } },
+    })
+  }
+})
+
+test('custom scheme injects the user stylesheet live', async ({ request, page }) => {
+  const update = await request.post(`${BASE_URL}/sidebar/api/settings.update`, {
+    data: { patch: { titleBarScheme: 'custom', customCss: 'html { --dsh-e2e-marker: 1; }', titleBarCompat: true } },
+  })
+  expect(update.ok(), `settings.update: ${update.status()}`).toBe(true)
+  try {
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('[data-dsh-better-sidebar]')).toBeAttached({ timeout: 90_000 })
+    await expect(page.locator('style[data-dsh-custom-css="custom"]')).toBeAttached()
+    // The injected CSS is live (a custom property the page can read back).
+    const marker = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--dsh-e2e-marker').trim())
+    expect(marker).toBe('1')
+  } finally {
+    await request.post(`${BASE_URL}/sidebar/api/settings.update`, {
+      data: { patch: { titleBarScheme: 'auto', titleBarPresetId: '', customCss: '', titleBarCompat: false } },
+    })
+  }
 })
