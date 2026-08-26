@@ -210,6 +210,8 @@ export const fr: Record<string, string> = {
   settingsToolsDesc: 'Une fois activé, le modèle peut créer et piloter des terminaux de la barre latérale via les 8 outils terminal_* (désactivé par défaut)',
   settingsBottomTerminalTitle: 'Ouvrir automatiquement un terminal au premier déploiement du panneau inférieur',
   settingsBottomTerminalDesc: 'Lors du premier déploiement du panneau inférieur dans une session, tenter d’y ouvrir automatiquement un nouvel onglet de terminal (la limite du nombre de terminaux s’applique toujours ; activé par défaut)',
+  settingsBottomPanelTitle: 'Espace de travail inférieur',
+  settingsBottomPanelDesc: 'Active un espace de travail inférieur séparé dans la barre latérale sur ordinateur ; sa désactivation déplace les onglets inférieurs existants vers le volet droit',
   settingsFontFamilyTitle: 'Police du terminal',
   settingsFontFamilyDesc: 'Famille de polices personnalisée du terminal (CSS font-family, ex. "JetBrains Mono", monospace ; vide = suit la police monospace du thème)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

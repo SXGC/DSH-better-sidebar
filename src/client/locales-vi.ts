@@ -217,6 +217,8 @@ export const vi: Record<string, string> = {
   settingsToolsDesc: 'Khi bật, mô hình có thể tạo và điều khiển terminal thanh bên qua 8 công cụ terminal_* (mặc định tắt)',
   settingsBottomTerminalTitle: 'Tự động mở terminal khi panel dưới mở rộng lần đầu',
   settingsBottomTerminalDesc: 'Khi panel dưới được mở rộng lần đầu trong phiên, thử mở một tab terminal mới ở panel dưới (giới hạn terminal vẫn áp dụng; mặc định bật)',
+  settingsBottomPanelTitle: 'Không gian làm việc phía dưới',
+  settingsBottomPanelDesc: 'Bật một không gian làm việc phía dưới riêng trong thanh bên trên máy tính; khi tắt, các tab phía dưới hiện có sẽ được chuyển sang ngăn bên phải',
   settingsFontFamilyTitle: 'Font terminal',
   settingsFontFamilyDesc: 'Font terminal tùy chỉnh (CSS font-family, vd: "JetBrains Mono", monospace; để trống theo font mono của theme)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

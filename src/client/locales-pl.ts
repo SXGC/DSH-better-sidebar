@@ -219,6 +219,8 @@ export const pl: Record<string, string> = {
   settingsToolsDesc: 'Po włączeniu model może tworzyć i sterować terminalami panelu bocznego przez 8 narzędzi terminal_* (domyślnie wyłączone)',
   settingsBottomTerminalTitle: 'Automatycznie otwieraj terminal przy pierwszym rozwinięciu panelu dolnego',
   settingsBottomTerminalDesc: 'Gdy panel dolny jest rozwijany po raz pierwszy w sesji, spróbuj otworzyć nową kartę terminala tam (limit terminali nadal obowiązuje; domyślnie włączone)',
+  settingsBottomPanelTitle: 'Dolny obszar roboczy',
+  settingsBottomPanelDesc: 'Włącza oddzielny dolny obszar roboczy na pasku bocznym pulpitu; wyłączenie przenosi istniejące dolne karty do prawego panelu',
   settingsFontFamilyTitle: 'Krój czcionki terminala',
   settingsFontFamilyDesc: 'Niestandardowy krój czcionki terminala (stos font-family CSS, np. "JetBrains Mono", monospace; puste = krój monospace z motywu)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

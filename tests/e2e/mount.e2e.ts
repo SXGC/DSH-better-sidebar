@@ -13,7 +13,8 @@
  *     lives inside the official `right-sidebar` region;
  *  3. asserts the plugin's crash markers never appear (no RenderBoundary /
  *     fail() strips, no `pageerror`, no plugin-prefixed console errors);
- *  4. opens the official fourth track from `shell.overlay`, sweeps every
+ *  4. opens the official fourth track from the Host-owned layout action,
+ *     proves `shell.overlay` contains only the free-window layer, sweeps every
  *     built-in tab (Files / Source Control / Tasks / Terminal / Browser) —
  *     including the lazily-fetched terminal chunk — and then opens seeded
  *     files through the Files window's tree (separate mode: each file opens
@@ -182,6 +183,8 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
   await expect(sidebar).toBeAttached({ timeout: 90_000 })
   await expect(page.locator('body > [data-dsh-better-sidebar]')).toHaveCount(0)
   await expect(page.locator('[data-shell-overlay] [data-dsh-better-sidebar-overlay]')).toHaveCount(1)
+  await expect(page.locator('[data-shell-overlay] [data-dsh-better-sidebar-toggles]')).toHaveCount(0)
+  await expect(page.locator('[data-shell-overlay] [data-dsh-toggle-cluster]')).toHaveCount(0)
 
   // A keyless boot stacks onboarding takeovers that mask the whole shell: a
   // versioned welcome notice ("Continue", persists its acknowledgement to
@@ -216,17 +219,18 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
     if (!dismissed) break
   }
 
-  // The seeded session must give the sidebar a session scope: without it the
-  // shell renders a disabled toggle cluster and the tab sweep is impossible.
+  // The seeded session gives the occupant a real scope for the tab sweep.
   const tabBar = sidebar.locator('[title]')
   await expect(tabBar.first()).toBeAttached({ timeout: 90_000 })
 
-  // openByDefault defaults OFF. The shell-overlay control remains clickable
-  // while the fourth track is zero; opening must narrow the official
-  // conversation track and expose only the AppFrame's resize handle.
-  const toggles = page.locator('[data-shell-overlay] [data-dsh-better-sidebar-toggles]')
-  const expandButton = toggles.getByRole('button', { name: 'Expand sidebar' })
-  await expect(expandButton, 'shell.overlay must offer the collapsed right-sidebar toggle').toHaveCount(1)
+  // openByDefault defaults OFF. The plugin action lives in the Host-owned
+  // persistent header seat (not shell.overlay), including its real aria
+  // state. Opening narrows the conversation track and exposes the AppFrame
+  // resize handle.
+  const layoutActions = page.locator('[data-conversation-header-frame] [data-layout-actions]')
+  const expandButton = layoutActions.getByRole('button', { name: 'Expand sidebar' })
+  await expect(expandButton, 'the Host layout-action seat must offer the collapsed right-sidebar action').toHaveCount(1)
+  await expect(expandButton).toHaveAttribute('aria-expanded', 'false')
   const conversation = page.locator('[data-layout-region="conversation"]')
   const closedConversationWidth = await conversation.evaluate(element => element.getBoundingClientRect().width)
   // A collapsed official track and the overlay surface must not enlarge the
@@ -243,6 +247,8 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
     )
     .toEqual({ overflowX: true, overflowY: true })
   await expandButton.click()
+  const collapseButton = layoutActions.getByRole('button', { name: 'Collapse sidebar' })
+  await expect(collapseButton).toHaveAttribute('aria-expanded', 'true')
   await expect(page.locator('[data-side="right-sidebar"]'), 'the official fourth-track handle must be present').toHaveCount(1)
   await expect.poll(
     () => conversation.evaluate(element => element.getBoundingClientRect().width),
@@ -253,11 +259,11 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
   // Closing returns the fourth track to zero without removing the overlay
   // entry; reopen once more so the built-in sweep below exercises the same
   // user path a collapsed desktop user has.
-  const collapseButton = toggles.getByRole('button', { name: 'Collapse sidebar' })
   await expect(collapseButton).toHaveCount(1)
   await collapseButton.click()
   await expect(page.locator('[data-side="right-sidebar"]')).toHaveCount(0)
   await expect(expandButton).toHaveCount(1)
+  await expect(expandButton).toHaveAttribute('aria-expanded', 'false')
   await expect.poll(
     () => conversation.evaluate(element => element.getBoundingClientRect().width),
     { timeout: 90_000 },
@@ -566,8 +572,11 @@ test('conservative auto: URL stamps alone never modify the layout; plugin chrome
   await expect
     .poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue('--dsh-title-bar-strip')))
     .toBe('')
-  // The stable addressing surface for presets / custom CSS is mounted.
-  await expect(page.locator('[data-dsh-toggle-cluster]')).toBeAttached()
+  // The free-window layer remains the overlay addressing surface; legacy
+  // toggle-cluster markers must not return through this compatibility lane.
+  await expect(page.locator('[data-shell-overlay] [data-dsh-better-sidebar-overlay]')).toBeAttached()
+  await expect(page.locator('[data-dsh-toggle-cluster]')).toHaveCount(0)
+  await expect(page.locator('[data-dsh-better-sidebar-toggles]')).toHaveCount(0)
   await expect(page.locator('[data-dsh-panel]').first()).toBeAttached()
   // The plugin's interactive chrome opts out of Electron drag regions
   // (issues #103/#111) — inert in plain browsers, present in the bundle

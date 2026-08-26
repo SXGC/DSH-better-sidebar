@@ -118,6 +118,14 @@ describe('official-layout isolation', () => {
     expect(htmlStyle.getPropertyValue('--dsh-sidebar-width')).toBe('')
     expect(htmlStyle.getPropertyValue('--dsh-sidebar-height')).toBe('')
   })
+
+  it('does not render the bottom surface, resize handle, or close action while the feature is disabled', () => {
+    const { container, unmount } = mountSidebar()
+    expect(container.querySelector('[data-dsh-bottom-panel]')).toBeNull()
+    expect(container.querySelector(`[aria-label="${t('collapseBottomPanel')}"]`)).toBeNull()
+    expect(container.querySelector('[class*="bottomResize"]')).toBeNull()
+    unmount()
+  })
 })
 
 describe('tab crash containment', () => {

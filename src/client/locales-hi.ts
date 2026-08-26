@@ -217,6 +217,8 @@ export const hi: Record<string, string> = {
   settingsToolsDesc: 'सक्षम होने पर, मॉडल 8 terminal_* टूल्स से साइडबार टर्मिनल बना और चला सकता है (डिफ़ॉल्ट रूप से बंद)',
   settingsBottomTerminalTitle: 'निचला पैनल पहली बार खुलने पर स्वतः टर्मिनल खोलें',
   settingsBottomTerminalDesc: 'सत्र में निचला पैनल पहली बार विस्तृत होने पर वहाँ नया टर्मिनल टैब खोलने का प्रयास (टर्मिनल कोटा लागू; डिफ़ॉल्ट रूप से चालू)',
+  settingsBottomPanelTitle: 'निचला कार्यक्षेत्र',
+  settingsBottomPanelDesc: 'डेस्कटॉप साइडबार में अलग निचला कार्यक्षेत्र चालू करें; इसे बंद करने पर मौजूदा निचले टैब दाएँ पेन में चले जाते हैं',
   settingsFontFamilyTitle: 'टर्मिनल फ़ॉन्ट परिवार',
   settingsFontFamilyDesc: 'कस्टम टर्मिनल फ़ॉन्ट परिवार (CSS font-family स्टैक जैसे "JetBrains Mono", monospace; थीम के मोनोस्पेस फ़ॉन्ट का पालन करने के लिए खाली छोड़ें)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

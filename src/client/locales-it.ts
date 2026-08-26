@@ -208,6 +208,8 @@ export const it: Record<string, string> = {
   settingsToolsDesc: 'Se attivato, il modello può creare e gestire terminali della barra laterale attraverso gli 8 strumenti terminal_* (disattivato per impostazione predefinita)',
   settingsBottomTerminalTitle: 'Apri automaticamente un terminale alla prima espansione del pannello inferiore',
   settingsBottomTerminalDesc: 'Quando il pannello inferiore viene espanso per la prima volta in una sessione, prova ad aprire una nuova scheda terminale nel pannello inferiore (il limite di terminali si applica comunque; attivo per impostazione predefinita)',
+  settingsBottomPanelTitle: 'Area di lavoro inferiore',
+  settingsBottomPanelDesc: 'Abilita un’area di lavoro inferiore separata nella barra laterale desktop; disabilitandola, le schede inferiori esistenti vengono spostate nel pannello destro',
   settingsFontFamilyTitle: 'Famiglia di caratteri del terminale',
   settingsFontFamilyDesc: 'Famiglia di caratteri personalizzata del terminale (uno stack CSS font-family come "JetBrains Mono", monospace; lasci vuoto per seguire il carattere a spaziatura fissa del tema)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

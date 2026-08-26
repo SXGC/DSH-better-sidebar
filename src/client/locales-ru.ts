@@ -214,6 +214,8 @@ export const ru: Record<string, string> = {
   settingsToolsDesc: 'Если включено, модель может через 8 инструментов (terminal_create и др.) создавать терминалы боковой панели и управлять ими (по умолчанию выключено)',
   settingsBottomTerminalTitle: 'Автооткрытие терминала при первом разворачивании нижней панели',
   settingsBottomTerminalDesc: 'При первом разворачивании нижней панели в сессии попытаться автоматически открыть новую вкладку терминала в ней (лимит терминалов всё равно применяется; по умолчанию включено)',
+  settingsBottomPanelTitle: 'Нижняя рабочая область',
+  settingsBottomPanelDesc: 'Включает отдельную нижнюю рабочую область в боковой панели на компьютере; при отключении существующие нижние вкладки перемещаются в правую панель',
   settingsFontFamilyTitle: 'Шрифт терминала',
   settingsFontFamilyDesc: 'Семейство шрифта терминала (CSS font-family, напр. "JetBrains Mono", monospace; пусто — моноширинный шрифт темы)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

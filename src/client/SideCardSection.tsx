@@ -516,7 +516,9 @@ export function SettingsBody(props: {
 }) {
   const { feature, prefs, store, service, onToggle, onCommit, onSelectValue, onPluginToggle, onPluginCommit, onPluginSelectValue, onPluginWrite, onClose } = props
   const render = feature.settings?.render
-  const toggles = feature.settings?.toggles ?? []
+  const toggles = (feature.settings?.toggles ?? []).filter(toggle => (
+    toggle.key !== 'bottomPanelAutoTerminal' || prefs.bottomPanelEnabled
+  ))
   const pluginToggles = feature.settings?.pluginToggles ?? []
   if (render === undefined && toggles.length === 0 && pluginToggles.length === 0) return null
   // Plugin rows read their values from the descriptor's OWN blob through
@@ -877,6 +879,17 @@ export function SideCardSection({ store, service }: SideCardSectionProps) {
             label={t('settingsOpenTitle')}
             checked={prefs.openByDefault}
             onChange={onToggle}
+          />
+        </div>
+        <div className={css.row}>
+          <span className={css.rowText}>
+            <span className={css.title}>{t('settingsBottomPanelTitle')}</span>
+            <span className={css.desc}>{t('settingsBottomPanelDesc')}</span>
+          </span>
+          <Switch
+            label={t('settingsBottomPanelTitle')}
+            checked={prefs.bottomPanelEnabled}
+            onChange={(next) => { applyPref({ bottomPanelEnabled: next }) }}
           />
         </div>
         <div className={css.row}>

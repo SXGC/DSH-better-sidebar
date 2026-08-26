@@ -217,6 +217,8 @@ export const ja: Record<string, string> = {
   settingsToolsDesc: 'オンにすると、モデルが terminal_create 等 8 個のツールでサイドバーターミナルを作成・操作可能（デフォルトオフ）',
   settingsBottomTerminalTitle: '下パネル初回展開時に自動でターミナルを開く',
   settingsBottomTerminalDesc: '会話ごとに下パネルを初めて展開した際、下パネルに新しいターミナルタブを自動で開く（ターミナル数上限は依然適用。デフォルトオン）',
+  settingsBottomPanelTitle: '下部ワークベンチ',
+  settingsBottomPanelDesc: 'デスクトップのサイドバー内で独立した下部ワークベンチを有効にします。無効化すると既存の下部タブは右ペインへ移動します',
   settingsFontFamilyTitle: 'ターミナルフォント',
   settingsFontFamilyDesc: 'ターミナルのカスタムフォントファミリー（CSS font-family、例: "JetBrains Mono", monospace。空欄でテーマの等幅フォントに追従）',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

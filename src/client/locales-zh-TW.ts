@@ -232,6 +232,8 @@ export const zhTW: Record<string, string> = {
   settingsToolsDesc: '開啟後，模型可透過 terminal_create 等 8 個工具建立並操作側邊欄終端（預設關閉）',
   settingsBottomTerminalTitle: '底部面板首次展開自動開終端',
   settingsBottomTerminalDesc: '每次工作階段中第一次展開底部面板時，嘗試在底部面板自動開啟一個新終端標籤（終端數量上限仍會限制；預設開啟）',
+  settingsBottomPanelTitle: '底部工作台',
+  settingsBottomPanelDesc: '在桌面側邊欄中啟用獨立的底部工作台；關閉時，現有底部標籤會移至右側面板',
   settingsFontFamilyTitle: '終端字體',
   settingsFontFamilyDesc: '自訂終端字體族（CSS font-family，如 "JetBrains Mono", monospace；留空跟隨主題等寬字體）',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

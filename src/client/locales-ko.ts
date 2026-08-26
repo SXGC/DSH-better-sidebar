@@ -209,6 +209,8 @@ export const ko: Record<string, string> = {
   settingsToolsDesc: '켜면 모델이 terminal_create 등 8개 도구로 사이드바 터미널을 만들고 조작할 수 있습니다(기본 꺼짐)',
   settingsBottomTerminalTitle: '하단 패널을 처음 펼칠 때 터미널 자동 열기',
   settingsBottomTerminalDesc: '세션에서 하단 패널을 처음 펼칠 때 하단 패널에 새 터미널 탭을 자동으로 열려고 시도합니다(터미널 개수 상한은 여전히 적용됩니다. 기본 켜짐)',
+  settingsBottomPanelTitle: '하단 작업 공간',
+  settingsBottomPanelDesc: '데스크톱 사이드바에서 별도의 하단 작업 공간을 사용합니다. 끄면 기존 하단 탭이 오른쪽 창으로 이동합니다',
   settingsFontFamilyTitle: '터미널 글꼴',
   settingsFontFamilyDesc: '터미널 글꼴 모음을 지정합니다(CSS font-family, 예: "JetBrains Mono", monospace. 비워두면 테마의 고정폭 글꼴을 따릅니다)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

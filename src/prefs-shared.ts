@@ -41,6 +41,8 @@ export interface SidebarPrefs {
    * dormant until the user explicitly enables it in the side card settings.
    */
   agentOpenTools: boolean
+  /** Whether the optional desktop bottom workbench is available. */
+  bottomPanelEnabled: boolean
   /**
    * Custom terminal font-family stack (a CSS font-family value, e.g.
    * `'JetBrains Mono', monospace`). Empty string follows the app's theme
@@ -248,6 +250,7 @@ export const SIDEBAR_PREFS_DEFAULTS: SidebarPrefs = {
   autoOpenJobs: true,
   agentTerminalTools: false,
   agentOpenTools: false,
+  bottomPanelEnabled: false,
   bottomPanelAutoTerminal: true,
   terminalFontFamily: '',
   terminalFontSize: TERMINAL_FONT_SIZE_DEFAULT,

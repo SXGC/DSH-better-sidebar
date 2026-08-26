@@ -61,6 +61,9 @@ export function parsePrefs(value: unknown): SidebarPrefs {
     agentOpenTools: typeof record.agentOpenTools === 'boolean'
       ? record.agentOpenTools
       : SIDEBAR_PREFS_DEFAULTS.agentOpenTools,
+    bottomPanelEnabled: typeof record.bottomPanelEnabled === 'boolean'
+      ? record.bottomPanelEnabled
+      : SIDEBAR_PREFS_DEFAULTS.bottomPanelEnabled,
     bottomPanelAutoTerminal: typeof record.bottomPanelAutoTerminal === 'boolean'
       ? record.bottomPanelAutoTerminal
       : SIDEBAR_PREFS_DEFAULTS.bottomPanelAutoTerminal,

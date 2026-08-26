@@ -613,7 +613,7 @@ export function Sidebar(props: {
     // The bottom panel does not exist on narrow viewports (the two
     // workbenches merge into one panel), so the first-expansion auto
     // terminal is a desktop-only behavior.
-    if (narrow) return
+    if (narrow || !snapshot.prefs.bottomPanelEnabled) return
     if (state === undefined) return
     const wasOpen = bottomWasOpenRef.current
     bottomWasOpenRef.current = state.bottomOpen
@@ -857,7 +857,7 @@ export function Sidebar(props: {
           />
         </div>
       </div>
-      {!narrow && (
+      {!narrow && snapshot.prefs.bottomPanelEnabled && (
         <div
           ref={bottomRef}
           className={clsx(css.bottomPanel, !state.bottomOpen && css.bottomPanelHidden)}

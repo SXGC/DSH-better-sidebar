@@ -67,6 +67,8 @@ describe('dsh-better-sidebar plugin export shape', () => {
     expect(resolved.agentTerminalTools).toBe(false)
     // The sidebar-open tool defaults OFF too (same dormant-until-enabled rule).
     expect(resolved.agentOpenTools).toBe(false)
+    // The optional bottom workbench is dormant until explicitly enabled.
+    expect(resolved.bottomPanelEnabled).toBe(false)
     // The terminal font customizations default to the theme (empty family)
     // and 13px.
     expect(resolved.terminalFontFamily).toBe('')
@@ -94,6 +96,6 @@ describe('dsh-better-sidebar plugin export shape', () => {
     const overridden = (PrefsSchema as unknown as {
       (input: Record<string, unknown> | undefined): Record<string, unknown>
     })({ openByDefault: false, defaultWidthPercent: 45 })
-    expect(overridden).toEqual({ openByDefault: false, defaultWidthPercent: 45, autoOpenSubagent: true, autoOpenJobs: true, agentTerminalTools: false, agentOpenTools: false, bottomPanelAutoTerminal: true, terminalFontFamily: '', terminalFontSize: 13, interceptOpenPath: true, editorExplorer: false, terminalShell: '', terminalShellArgs: '', titleBarCompat: false, titleBarStripPx: 40, htmlViewerNoSandbox: false, htmlViewerDefaultUnsafe: false, browserNoSandbox: false, browserInterceptLinks: true, browserInterceptHttp: true, browserInterceptHttps: false, browserAllowedLoopback: '', tabsEnabled: {}, viewersEnabled: {}, pluginSettings: {} })
+    expect(overridden).toEqual({ openByDefault: false, defaultWidthPercent: 45, autoOpenSubagent: true, autoOpenJobs: true, agentTerminalTools: false, agentOpenTools: false, bottomPanelEnabled: false, bottomPanelAutoTerminal: true, terminalFontFamily: '', terminalFontSize: 13, interceptOpenPath: true, editorExplorer: false, terminalShell: '', terminalShellArgs: '', titleBarCompat: false, titleBarStripPx: 40, htmlViewerNoSandbox: false, htmlViewerDefaultUnsafe: false, browserNoSandbox: false, browserInterceptLinks: true, browserInterceptHttp: true, browserInterceptHttps: false, browserAllowedLoopback: '', tabsEnabled: {}, viewersEnabled: {}, pluginSettings: {} })
   })
 })

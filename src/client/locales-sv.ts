@@ -200,6 +200,8 @@ export const sv: Record<string, string> = {
   settingsToolsDesc: 'När aktiverat kan modellen skapa och styra sidopanelsterminaler via de 8 terminal_*-verktygen (av som standard)',
   settingsBottomTerminalTitle: 'Öppna automatiskt en terminal vid bottenpanelens första expandering',
   settingsBottomTerminalDesc: 'När bottenpanelen expanderas för första gången i en session, försök öppna en ny terminalflik där (terminalgränsen gäller fortfarande; på som standard)',
+  settingsBottomPanelTitle: 'Nedre arbetsyta',
+  settingsBottomPanelDesc: 'Aktivera en separat nedre arbetsyta i skrivbordets sidofält; när den inaktiveras flyttas befintliga nedre flikar till den högra panelen',
   settingsFontFamilyTitle: 'Terminalens teckensnittsfamilj',
   settingsFontFamilyDesc: 'Anpassad teckensnittsfamilj för terminalen (en CSS font-family-stack som "JetBrains Mono", monospace; lämna tomt för att följa temats monospaced-teckensnitt)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

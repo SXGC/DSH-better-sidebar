@@ -86,8 +86,8 @@ test('official right-sidebar handle owns the clamped track and conversation geom
   await expect(overlay).toHaveCount(1)
   await dismissTakeovers(page)
 
-  const expandButton = overlay.getByRole('button', { name: 'Expand sidebar' })
-  await expect(expandButton, 'shell.overlay must offer the collapsed right-sidebar toggle').toHaveCount(1)
+  const expandButton = page.locator('[data-layout-actions]').getByRole('button', { name: 'Expand sidebar' })
+  await expect(expandButton, 'the Host layout-action seat must offer the collapsed right-sidebar action').toHaveCount(1)
   await expandButton.click()
   const handle = page.locator('[data-side="right-sidebar"]')
   const conversation = page.locator('[data-layout-region="conversation"]')
@@ -175,7 +175,8 @@ test('a free window survives official collapse and docking it reveals the right 
   await expect(overlay).toHaveCount(1)
   await dismissTakeovers(page)
 
-  const expandButton = overlay.getByRole('button', { name: 'Expand sidebar' })
+  const layoutActions = page.locator('[data-layout-actions]')
+  const expandButton = layoutActions.getByRole('button', { name: 'Expand sidebar' })
   if ((await expandButton.count()) === 1) await expandButton.click()
   await expect(page.locator('[data-side="right-sidebar"]')).toHaveCount(1)
 
@@ -191,7 +192,7 @@ test('a free window survives official collapse and docking it reveals the right 
   const before = await floatWindow.boundingBox()
   expect(before).not.toBeNull()
 
-  const collapseButton = overlay.getByRole('button', { name: 'Collapse sidebar' })
+  const collapseButton = layoutActions.getByRole('button', { name: 'Collapse sidebar' })
   await expect(collapseButton).toHaveCount(1)
   await collapseButton.click()
   await expect(page.locator('[data-side="right-sidebar"]')).toHaveCount(0)

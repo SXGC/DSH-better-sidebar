@@ -892,6 +892,7 @@ describe('side card settings routes', () => {
         autoOpenSubagent: true,
         autoOpenJobs: true,
         agentTerminalTools: false, agentOpenTools: false,
+        bottomPanelEnabled: false,
         bottomPanelAutoTerminal: true,
         terminalFontFamily: '',
         terminalFontSize: 13,

@@ -217,6 +217,8 @@ export const th: Record<string, string> = {
   settingsToolsDesc: 'เมื่อเปิดใช้ โมเดลสามารถสร้างและควบคุมเทอร์มินัลแถบด้านข้างผ่านเครื่องมือ terminal_* 8 ตัว (ปิดเป็นค่าเริ่มต้น)',
   settingsBottomTerminalTitle: 'เปิดเทอร์มินัลอัตโนมัติเมื่อพาเนลล่างขยายครั้งแรก',
   settingsBottomTerminalDesc: 'เมื่อพาเนลล่างถูกขยายครั้งแรกในเซสชัน ลองเปิด tab เทอร์มินัลใหม่ที่นั่น (โควต้าเทอร์มินัลยังคงมีผล; เปิดเป็นค่าเริ่มต้น)',
+  settingsBottomPanelTitle: 'พื้นที่ทำงานด้านล่าง',
+  settingsBottomPanelDesc: 'เปิดพื้นที่ทำงานด้านล่างแยกต่างหากในแถบด้านข้างเดสก์ท็อป เมื่อปิด แท็บด้านล่างที่มีอยู่จะย้ายไปยังพาเนลขวา',
   settingsFontFamilyTitle: 'ฟอนต์เทอร์มินัล',
   settingsFontFamilyDesc: 'ฟอนต์เทอร์มินัลที่กำหนดเอง (CSS font-family stack เช่น "JetBrains Mono", monospace; ปล่อยว่างเพื่อตามฟอนต์ monospace ของธีม)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

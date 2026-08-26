@@ -10,13 +10,14 @@
  */
 import { createElement } from 'react'
 import type { Context } from '../context-types.ts'
-import { allLeaves, createSidebarStore, isAgentTabId } from './state.ts'
+import { allLeaves, createSidebarStore, isAgentTabId, toggleBottomPanel } from './state.ts'
 import { createBetterSidebarService, matchUrlTarget } from './service.ts'
 import { revalidateChunksOnReactivate, setChunkModuleSystem } from './chunk-loader.ts'
 import { registerBuiltins } from './builtins/index.ts'
 import { Sidebar } from './Sidebar.tsx'
 import { createRightSidebarOwnerSource, Occupant, type RightSidebarOwnerProps } from './Occupant.tsx'
 import { OverlaySurface } from './OverlaySurface.tsx'
+import { BottomPanelLayoutAction, RightSidebarLayoutAction } from './LayoutActions.tsx'
 import { RenderBoundary } from './RenderBoundary.tsx'
 import { registerOpenPathInterception, registerTurnTailInterception } from './intercept.tsx'
 import { registerLinkInterception } from './link-intercept.ts'
@@ -297,10 +298,6 @@ export function apply(ctx: Context): void {
                   inject: () => ({
                     ctx,
                     store: sidebarStore,
-                    layoutSnapshot: ctx.layout.snapshot,
-                    ownerSnapshot: ownerSource,
-                    localeSnapshot: ctx.locale,
-                    toggleRightSidebar: () => { ctx.layout.toggleRightSidebar() },
                     revealDockedSurface,
                   }),
                 }, OverlaySurface)
@@ -309,9 +306,39 @@ export function apply(ctx: Context): void {
                 return () => {}
               }
             })
-            disposeSlots = () => { offOverlay(); offOccupant() }
-            surfacesActive = true
-            reconcileActiveSession(true)
+            try {
+              const offLayoutActions = ctx.slots.inject('conversation.layout.actions', () => {
+                const offBottom = ctx.slots.register({
+                  name: 'conversation.layout.actions',
+                  id: 'better-sidebar:bottom-toggle',
+                  order: 90,
+                  inject: () => ({
+                    hooks: {
+                      layout: ctx.layout.snapshot,
+                      rightSidebarOwner: ownerSource,
+                      sidebar: sidebarStore,
+                    },
+                    toggleBottomPanel: () => { sidebarStore.reduce(state => toggleBottomPanel(state)) },
+                  }),
+                }, BottomPanelLayoutAction)
+                const offRight = ctx.slots.register({
+                  name: 'conversation.layout.actions',
+                  id: 'better-sidebar:right-toggle',
+                  order: 100,
+                  inject: () => ({
+                    hooks: { rightSidebarOwner: ownerSource },
+                    toggleRightSidebar: () => { ctx.layout.toggleRightSidebar() },
+                  }),
+                }, RightSidebarLayoutAction)
+                return () => { offRight(); offBottom() }
+              })
+              disposeSlots = () => { offLayoutActions(); offOverlay(); offOccupant() }
+              surfacesActive = true
+              reconcileActiveSession(true)
+            } catch (error) {
+              offOverlay()
+              throw error
+            }
           } catch (error) {
             offOccupant()
             throw error

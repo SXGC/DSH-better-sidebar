@@ -469,6 +469,7 @@ describe('service.openTab dedupe', () => {
 describe('service.openTab across the two panels', () => {
   it('openTab lands in the bottom tree when the active pane lives there', () => {
     const store = createSidebarStore()
+    store.setPrefs({ ...store.getPrefs(), bottomPanelEnabled: true })
     const service = createBetterSidebarService(store)
     service.registerTab({ id: 'git', title: 'Git', component: () => null })
     store.setSession('s1')
@@ -481,6 +482,7 @@ describe('service.openTab across the two panels', () => {
 
   it('dedupeKey focuses an existing instance in the OTHER tree (single-instance across panels)', () => {
     const store = createSidebarStore()
+    store.setPrefs({ ...store.getPrefs(), bottomPanelEnabled: true })
     const service = createBetterSidebarService(store)
     service.registerTab({
       id: 'singleton',
@@ -504,6 +506,7 @@ describe('service.openTab across the two panels', () => {
 
   it('closeTab by id closes a tab living in the bottom tree', () => {
     const store = createSidebarStore()
+    store.setPrefs({ ...store.getPrefs(), bottomPanelEnabled: true })
     const service = createBetterSidebarService(store)
     service.registerTab({ id: 'git', title: 'Git', component: () => null })
     store.setSession('s1')
@@ -630,6 +633,7 @@ describe('service.openTab auto-expand for content opens', () => {
 
   it('a wide-viewport path open landing in the bottom tree expands the bottom panel instead', () => {
     const store = createSidebarStore()
+    store.setPrefs({ ...store.getPrefs(), bottomPanelEnabled: true })
     const service = createBetterSidebarService(store)
     service.registerTab({ id: 'editor', title: 'Editor', component: () => null })
     store.setSession('s1')
@@ -746,6 +750,7 @@ describe('updateTab (v0.12.0)', () => {
 describe('activateTab (v0.12.0)', () => {
   it('activates a tab in either tree and fires onActivate with the session scope', () => {
     const store = createSidebarStore()
+    store.setPrefs({ ...store.getPrefs(), bottomPanelEnabled: true })
     const service = createBetterSidebarService(store)
     const seen: Array<{ tab: string; sessionId: string }> = []
     service.registerTab({

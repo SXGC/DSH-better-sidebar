@@ -217,6 +217,8 @@ export const tr: Record<string, string> = {
   settingsToolsDesc: 'Etkinleştirildiğinde model, 8 terminal_* aracı üzerinden kenar çubuğu terminalleri oluşturup kullanabilir (varsayılan kapalı)',
   settingsBottomTerminalTitle: 'Alt panelin ilk genişletilmesinde otomatik terminal aç',
   settingsBottomTerminalDesc: 'Bir oturumda alt panel ilk genişletildiğinde orada yeni bir terminal sekmesi açmayı dene (terminal kotası yine geçerli; varsayılan açık)',
+  settingsBottomPanelTitle: 'Alt çalışma alanı',
+  settingsBottomPanelDesc: 'Masaüstü kenar çubuğunda ayrı bir alt çalışma alanını etkinleştirir; devre dışı bırakıldığında mevcut alt sekmeler sağ bölmeye taşınır',
   settingsFontFamilyTitle: 'Terminal yazı tipi ailesi',
   settingsFontFamilyDesc: 'Özel terminal yazı tipi ailesi (bir CSS font-family yığını gibi "JetBrains Mono", monospace; temanın sabit genişlikli yazı tipini izlemek için boş bırakın)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

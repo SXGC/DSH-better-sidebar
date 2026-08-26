@@ -52,6 +52,7 @@ function mountSidebar(): MountedSidebar {
   const container = document.createElement('div')
   document.body.append(container)
   const store = createSidebarStore()
+  store.setPrefs({ ...store.getPrefs(), bottomPanelEnabled: true })
   const service = createBetterSidebarService(store)
   // Fresh-session seed: the right panel starts OPEN, the bottom panel closed
   // (bottomOpen false → the first expansion is a false→true TRANSITION).

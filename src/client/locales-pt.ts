@@ -200,6 +200,8 @@ export const pt: Record<string, string> = {
   settingsToolsDesc: 'Quando ativado, o modelo pode criar e operar terminais da barra lateral por meio das 8 ferramentas terminal_* (desativado por padrão)',
   settingsBottomTerminalTitle: 'Abrir um terminal automaticamente na primeira expansão do painel inferior',
   settingsBottomTerminalDesc: 'Quando o painel inferior for expandido pela primeira vez em uma sessão, tente abrir uma nova aba de terminal lá (a cota de terminais ainda se aplica; ativado por padrão)',
+  settingsBottomPanelTitle: 'Área de trabalho inferior',
+  settingsBottomPanelDesc: 'Ativa uma área de trabalho inferior separada na barra lateral do desktop; ao desativá-la, as abas inferiores existentes são movidas para o painel direito',
   settingsFontFamilyTitle: 'Família de fonte do terminal',
   settingsFontFamilyDesc: 'Família de fonte personalizada do terminal (uma pilha CSS font-family como "JetBrains Mono", monospace; deixe vazio para seguir a fonte monoespaçada do tema)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

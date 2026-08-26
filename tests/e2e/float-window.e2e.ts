@@ -109,7 +109,7 @@ const bootExpanded = async (page: Page): Promise<ReturnType<Page['locator']>> =>
   await expect(overlay).toHaveCount(1)
   await dismissTakeovers(page)
   await expect(sidebar.locator('[title]').first()).toBeAttached({ timeout: 90_000 })
-  const expandButton = overlay.getByRole('button', { name: 'Expand sidebar' })
+  const expandButton = page.locator('[data-layout-actions]').getByRole('button', { name: 'Expand sidebar' })
   if ((await expandButton.count()) === 1) await expandButton.click()
   await expect
     .poll(() => page.locator('[data-layout-region="right-sidebar"]').evaluate(

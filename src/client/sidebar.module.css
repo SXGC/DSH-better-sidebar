@@ -69,51 +69,6 @@
   pointer-events: auto;
 }
 
-/* The persistent controls live in the same official overlay entry as floats.
-   The host-provided owner width keeps them immediately outside an open track. */
-.toggleCluster {
-  position: fixed;
-  top: calc(3px + env(safe-area-inset-top));
-  right: 10px;
-  z-index: 45;
-  display: flex;
-  flex-direction: row;
-  gap: 4px;
-  pointer-events: auto;
-}
-
-/* The closed-state affordance is the native rail icon control: a plain
-   28px circle (the app's icon-button size — the cluster must stay inside
-   the 34px tab-strip band so it never covers the pane headers below),
-   transparent fill, secondary ink; hover raises the fill. No border, no
-   shadow — the icon alone is the affordance. */
-.toggleButton {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-  transition:
-    background var(--ds-transition-duration-slow) var(--ds-ease-in-out),
-    color var(--ds-transition-duration-slow) var(--ds-ease-in-out);
-}
-
-.toggleButton:hover:not(:disabled):not([aria-disabled='true']) {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-}
-
-.toggleButton:disabled,
-.toggleButton[aria-disabled='true'] {
-  opacity: 0.4;
-  cursor: default;
-}
-
 .panel {
   box-sizing: border-box;
   position: relative;
@@ -379,8 +334,6 @@
    `no-drag` itself — some shells (Tauri, older desktop builds, third-party
    wrappers) have no blanket button rule. The property is a no-op in plain
    browsers and in shells without drag regions — safe everywhere. */
-.toggleCluster,
-.toggleButton,
 .tabBar,
 .floatHeader {
   -webkit-app-region: no-drag;
@@ -391,17 +344,13 @@
 /* Windows frameless / hidden-title-bar windows draw the native caption
    strip (minimize / maximize / close) at the window's top-right corner,
    OVER the web content. When the user enables the "position compatibility"
-   pref, the sidebar yields the strip: the toggle cluster drops below it and
-   the right panel's content starts below it — the panel's surface still
+   pref, the sidebar yields the strip: the right panel's content starts below
+   it — the panel's surface still
    spans the full height, so the caption buttons float over empty sidebar
    fill (the VSCode hidden-title-bar look). The strip height is user-tunable
    (`--dsh-title-bar-strip`, written by the Sidebar shell from
    `titleBarStripPx`; 40px fallback). The bottom panel is unaffected: it
    sits at the window's bottom, never under the top strip. */
-:global(body[data-dsh-title-bar-compat]) .toggleCluster {
-  top: calc(var(--dsh-title-bar-strip, 40px) + 3px);
-}
-
 :global(body[data-dsh-title-bar-compat]) .panel {
   /* The caption strip is drawn over the panel's own top edge: keep the
      surface full-height and push the content (the tab strip) below the
@@ -2544,7 +2493,6 @@
 
 /* Keyboard focus stays visible on every interactive control (the styling
    policy requires focus visibility; the accent token doubles as the ring). */
-.toggleButton:focus-visible,
 .bottomClose:focus-visible,
 .iconButton:focus-visible,
 .tab:focus-visible,
@@ -2575,8 +2523,6 @@
   .panelHidden,
   .bottomPanel,
   .bottomPanelHidden,
-  .toggleCluster,
-  .toggleButton,
   .tab,
   .tabBarPlus,
   .paneCard,

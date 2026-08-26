@@ -215,6 +215,8 @@ export const nl: Record<string, string> = {
   settingsToolsDesc: 'Indien ingeschakeld kan het model zijbalk-terminals aanmaken en besturen via de 8 terminal_*-tools (standaard uit)',
   settingsBottomTerminalTitle: 'Automatisch een terminal openen bij de eerste uitklap van het onderpaneel',
   settingsBottomTerminalDesc: 'Wanneer het onderpaneel voor het eerst in een sessie wordt uitgeklapt, wordt geprobeerd daar een nieuw terminaltabblad te openen (het terminalquotum blijft gelden; standaard aan)',
+  settingsBottomPanelTitle: 'Onderste werkruimte',
+  settingsBottomPanelDesc: 'Schakel een aparte onderste werkruimte in de desktopzijbalk in; bij uitschakelen worden bestaande onderste tabbladen naar het rechterpaneel verplaatst',
   settingsFontFamilyTitle: 'Terminallettertype-familie',
   settingsFontFamilyDesc: 'Aangepaste terminallettertype-familie (een CSS font-family-stack zoals "JetBrains Mono", monospace; leeg laten om het monospace-lettertype van het thema te volgen)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

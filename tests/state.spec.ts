@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   activateTab, allLeaves, BOTTOM_DEFAULT, BOTTOM_MIN, closeFloatByTab, closeTab, createSidebarStore,
-  dockFloat, FLOAT_MIN_H, FLOAT_MIN_W, floatTab, floatWithTab, insertLeafAt, makeDefaultState,
+  dockFloat, firstLeaf, FLOAT_MIN_H, FLOAT_MIN_W, floatTab, floatWithTab, insertLeafAt, makeDefaultState, mapLeaf,
   migrateBottomTabs, moveFloat, moveTab, moveTabToEdge, openDiffTab,
   openTabInActivePane, patchTab, raiseFloat, reconcileAgentTerminals, resizeFloat, resizeSplit,
   resizeSplitIn, revealPaths, sanitizeState, setBottomHeight,
   splitPane, tabOpenIn, toggleBottomPanel, toggleExpanded, togglePanel,
   type SidebarLeaf, type SidebarState, type SidebarTab, type SplitNode,
 } from '../src/client/state.ts'
+import { SIDEBAR_PREFS_DEFAULTS } from '../src/prefs-shared.ts'
 
 describe('sidebar state', () => {
   const state = (): SidebarState => makeDefaultState()
@@ -878,6 +879,73 @@ describe('v0.12.0 store additions', () => {
       } finally {
         delete g.window
         delete g.localStorage
+      }
+    })
+  })
+
+  describe('disabled bottom-workbench invariant', () => {
+    const withBottomEnabled = () => ({
+      ...SIDEBAR_PREFS_DEFAULTS,
+      bottomPanelEnabled: true,
+    }) as typeof SIDEBAR_PREFS_DEFAULTS
+
+    const putBottomTab = (state: SidebarState, id: string): SidebarState => ({
+      ...state,
+      activePane: firstLeaf(state.bottomSplits).id,
+      bottomOpen: true,
+      bottomSplits: mapLeaf(state.bottomSplits, firstLeaf(state.bottomSplits).id, leaf => {
+        leaf.tabs = [{ id, type: 'terminal', title: id }]
+        leaf.active = id
+      }),
+    })
+
+    const expectMigrated = (state: SidebarState): void => {
+      expect(allLeaves(state.bottomSplits).flatMap(leaf => leaf.tabs)).toEqual([])
+      expect(state.bottomOpen).toBe(false)
+      expect(state.activePane).toBe(firstLeaf(state.splits).id)
+      expect(allLeaves(state.splits).flatMap(leaf => leaf.tabs).map(tab => tab.type)).toContain('terminal')
+    }
+
+    it('migrates every cached session when prefs are disabled, even while suspended, and does not move tabs back on re-enable', () => {
+      const store = createSidebarStore()
+      store.setPrefs(withBottomEnabled())
+      store.setSession('cached-a')
+      store.reduce(state => putBottomTab(state, 'terminal:a'))
+      store.setSession('cached-b')
+      store.reduce(state => putBottomTab(state, 'terminal:b'))
+
+      store.setSuspended(true)
+      store.setPrefs({ ...withBottomEnabled(), bottomPanelEnabled: false } as typeof SIDEBAR_PREFS_DEFAULTS)
+      expectMigrated(store.getSnapshot().state!)
+      store.setSession('cached-a')
+      expectMigrated(store.getSnapshot().state!)
+
+      store.setPrefs(withBottomEnabled())
+      expectMigrated(store.getSnapshot().state!)
+    })
+
+    it('normalizes reducer and targeted-session results while disabled', () => {
+      const store = createSidebarStore()
+      store.setSession('active')
+      store.reduce(state => putBottomTab(state, 'terminal:active'))
+      expectMigrated(store.getSnapshot().state!)
+
+      store.reduceFor('targeted', state => putBottomTab(state, 'terminal:targeted'))
+      store.setSession('targeted')
+      expectMigrated(store.getSnapshot().state!)
+    })
+
+    it('normalizes a cold persisted state before publishing it', () => {
+      const cold = putBottomTab(makeDefaultState(), 'terminal:cold')
+      const storage = globalThis.localStorage as unknown as { getItem: (key: string) => string | null }
+      const originalGet = storage.getItem
+      storage.getItem = (key) => key === 'dsh-sidebar:v1:cold' ? JSON.stringify(cold) : null
+      try {
+        const store = createSidebarStore()
+        store.setSession('cold')
+        expectMigrated(store.getSnapshot().state!)
+      } finally {
+        storage.getItem = originalGet
       }
     })
   })

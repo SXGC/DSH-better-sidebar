@@ -218,6 +218,8 @@ export const ar: Record<string, string> = {
   settingsToolsDesc: 'عند التفعيل، يمكن للنموذج إنشاء وتشغيل طرفيات الشريط الجانبي عبر أدوات terminal_* الثمانية (معطّل افتراضياً)',
   settingsBottomTerminalTitle: 'فتح طرفية تلقائياً عند أول توسيع للوحة السفلية',
   settingsBottomTerminalDesc: 'عند توسيع اللوحة السفلية لأول مرة في الجلسة، حاول فتح تبويب طرفية جديد هناك (حصة الطرفيات ما زالت تسري؛ مفعّل افتراضياً)',
+  settingsBottomPanelTitle: 'مساحة العمل السفلية',
+  settingsBottomPanelDesc: 'فعّل مساحة عمل سفلية مستقلة في الشريط الجانبي لسطح المكتب؛ يؤدي تعطيلها إلى نقل تبويباتها الحالية إلى اللوحة اليمنى',
   settingsFontFamilyTitle: 'عائلة خط الطرفية',
   settingsFontFamilyDesc: 'عائلة خط الطرفية المخصّصة (مكدس CSS font-family مثل "JetBrains Mono", monospace؛ اتركه فارغاً لاتّباع خط السمة أحادي المسافة)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

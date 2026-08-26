@@ -203,6 +203,8 @@ export const de: Record<string, string> = {
   settingsToolsDesc: 'Wenn aktiviert, kann das Modell über die 8 terminal_*-Werkzeuge Terminale in der Seitenleiste erstellen und steuern (standardmäßig deaktiviert)',
   settingsBottomTerminalTitle: 'Beim ersten Ausklappen des unteren Panels automatisch ein Terminal öffnen',
   settingsBottomTerminalDesc: 'Wird das untere Panel in einer Sitzung zum ersten Mal ausgeklappt, wird dort versucht, einen neuen Terminal-Tab zu öffnen (das Terminal-Kontingent gilt weiterhin; standardmäßig aktiviert)',
+  settingsBottomPanelTitle: 'Unterer Arbeitsbereich',
+  settingsBottomPanelDesc: 'Aktiviert einen separaten unteren Arbeitsbereich in der Desktop-Seitenleiste; beim Deaktivieren werden vorhandene untere Tabs in den rechten Bereich verschoben',
   settingsFontFamilyTitle: 'Terminal-Schriftart',
   settingsFontFamilyDesc: 'Benutzerdefinierte Terminal-Schriftfamilie (ein CSS-font-family-Stapel wie "JetBrains Mono", monospace; leer lassen, um der Monospace-Schrift des Themas zu folgen)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',

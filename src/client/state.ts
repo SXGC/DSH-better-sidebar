@@ -1363,7 +1363,18 @@ export class SidebarStore {
    */
   setPrefs(prefs: SidebarPrefs): void {
     this.prefs = { ...prefs }
-    this.snapshot = { ...this.snapshot, prefs: this.prefs }
+    if (!this.prefs.bottomPanelEnabled) {
+      for (const [sessionId, state] of this.bySession) {
+        const normalized = migrateBottomTabs(state)
+        if (normalized === state) continue
+        this.bySession.set(sessionId, normalized)
+        this.schedulePersist(sessionId, normalized)
+      }
+    }
+    const activeState = this.snapshot.sessionId === undefined
+      ? undefined
+      : this.bySession.get(this.snapshot.sessionId) ?? this.snapshot.state
+    this.snapshot = { ...this.snapshot, state: activeState, prefs: this.prefs }
     this.notify()
   }
 
@@ -1395,6 +1406,12 @@ export class SidebarStore {
           this.bySession.set(sessionId, state)
         }
       }
+      const normalized = this.normalizeState(state)
+      if (normalized !== state) {
+        state = normalized
+        this.bySession.set(sessionId, state)
+        this.schedulePersist(sessionId, state)
+      }
       this.snapshot = { sessionId, state, prefs: this.prefs }
     }
     this.notify()
@@ -1416,9 +1433,10 @@ export class SidebarStore {
     if (sessionId === undefined || state === undefined) return
     const draft = structuredClone(state)
     mutator(draft)
-    this.bySession.set(sessionId, draft)
-    this.snapshot = { sessionId, state: draft, prefs: this.prefs }
-    this.schedulePersist(sessionId, draft)
+    const next = this.normalizeState(draft)
+    this.bySession.set(sessionId, next)
+    this.snapshot = { sessionId, state: next, prefs: this.prefs }
+    this.schedulePersist(sessionId, next)
     this.notify()
   }
 
@@ -1442,7 +1460,7 @@ export class SidebarStore {
     const sessionId = this.snapshot.sessionId
     const state = this.snapshot.state
     if (sessionId === undefined || state === undefined) return
-    const next = reducer(state)
+    const next = this.normalizeState(reducer(state))
     // A reducer returning the SAME reference means "no change": skip the
     // persist + notify entirely — strict no-op paths (unknown tab ids,
     // patchTab on a missing tab) must not churn the state or rewrite
@@ -1478,13 +1496,17 @@ export class SidebarStore {
       // like setSession's cache-hit path.
       nextIdCounter = maxCounterId(state)
     }
-    const next = reducer(state)
+    const next = this.normalizeState(reducer(state))
     // Same-reference result = no change: keep the counter restore (it may
     // have been seeded down) but skip the write.
     nextIdCounter = Math.max(nextIdCounter, counterBefore)
     if (next === state) return
     this.bySession.set(sessionId, next)
     this.schedulePersist(sessionId, next)
+  }
+
+  private normalizeState(state: SidebarState): SidebarState {
+    return this.prefs.bottomPanelEnabled ? state : migrateBottomTabs(state)
   }
 
   private schedulePersist(sessionId: string, state: SidebarState): void {

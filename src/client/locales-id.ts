@@ -215,6 +215,8 @@ export const id: Record<string, string> = {
   settingsToolsDesc: 'Saat diaktifkan, model dapat membuat dan mengendalikan terminal sidebar melalui 8 alat terminal_* (nonaktif secara default)',
   settingsBottomTerminalTitle: 'Buka terminal otomatis saat panel bawah pertama kali dibentangkan',
   settingsBottomTerminalDesc: 'Saat panel bawah pertama kali dibentangkan dalam sesi, coba buka tab terminal baru di panel bawah (kuota terminal tetap berlaku; aktif secara default)',
+  settingsBottomPanelTitle: 'Ruang kerja bawah',
+  settingsBottomPanelDesc: 'Aktifkan ruang kerja bawah terpisah di sidebar desktop; menonaktifkannya memindahkan tab bawah yang ada ke panel kanan',
   settingsFontFamilyTitle: 'Keluarga font terminal',
   settingsFontFamilyDesc: 'Keluarga font terminal kustom (stack CSS font-family seperti "JetBrains Mono", monospace; biarkan kosong untuk mengikuti font monospace tema)',
   settingsFontFamilyPlaceholder: '"JetBrains Mono", monospace',
