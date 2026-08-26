@@ -539,6 +539,103 @@ describe('Run Dashboard view', () => {
     unmount()
   })
 
+  it('opens nested descendants by direct parent but controls them through the root with localized feedback', async () => {
+    fetchQueue = [{
+      root: { sessionId: 'root', path: '/root', startedAt: 1_000, lastEventAt: 4_000 },
+      asOfSeq: 30,
+      agents: [
+        {
+          sessionId: 'parent',
+          parentSessionId: 'root',
+          path: '/root/parent',
+          mode: 'continuable',
+          label: 'Parent',
+          state: { residency: 'live', turn: { kind: 'idle' } },
+          modelSelection: { provider: 'deepseek', model: 'gpt-5.5' },
+          hasChildren: true,
+          declaredAt: 1_000,
+          declarationSeq: 1,
+          statePoints: [{ seq: 2, time: 1_100, transition: 'ready', state: { residency: 'live', turn: { kind: 'idle' } } }],
+        },
+        {
+          sessionId: 'grandchild',
+          parentSessionId: 'parent',
+          path: '/root/parent/grandchild',
+          mode: 'continuable',
+          label: 'Grandchild',
+          state: { residency: 'live', turn: { kind: 'running' } },
+          modelSelection: { provider: 'deepseek', model: 'gpt-5.5' },
+          hasChildren: false,
+          declaredAt: 2_000,
+          declarationSeq: 2,
+          statePoints: [{ seq: 3, time: 2_100, transition: 'turn-started', state: { residency: 'live', turn: { kind: 'running' } } }],
+        },
+      ],
+    }]
+    const snapshot = baseSnapshot()
+    snapshot.byId = {
+      root: { id: 'root', displayTitle: 'Root task', running: true },
+      parent: { id: 'parent', displayTitle: 'Parent task', origin: 'subagent', parentId: 'root', running: true },
+      grandchild: { id: 'grandchild', displayTitle: 'Grandchild task', origin: 'subagent', parentId: 'parent', running: true },
+    }
+    snapshot.subagentsByParent = {
+      root: {
+        state: 'ready',
+        parentAvailable: true,
+        error: null,
+        entries: [
+          { kind: 'child', id: 'parent', activity: 'running', hasChildren: true, mode: 'continuable', label: 'Parent' },
+        ],
+      },
+      parent: {
+        state: 'ready',
+        parentAvailable: true,
+        error: null,
+        entries: [
+          { kind: 'child', id: 'grandchild', activity: 'running', hasChildren: false, mode: 'continuable', label: 'Grandchild' },
+        ],
+      },
+    }
+    const list = makeList(snapshot)
+    const store = createSidebarStore()
+    store.setSession('root')
+    const openChild = vi.fn()
+    const interruptSubagent = vi.fn(async () => 'not-live' as const)
+    const { container, unmount } = mount(
+      createElement(SubagentView, {
+        sessionId: 'root',
+        active: true,
+        ctx: makeCtx(list, () => {}, { interruptSubagent } as Partial<Context['sessions']>),
+        store,
+        onOpenChild: openChild,
+      }),
+    )
+    await act(async () => {})
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="打开聊天 Grandchild"]') as HTMLButtonElement).click()
+    })
+    expect(openChild).toHaveBeenCalledWith({
+      parentSessionId: 'parent',
+      childSessionId: 'grandchild',
+      mode: 'continuable',
+    })
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="中断 Grandchild"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(interruptSubagent).toHaveBeenCalledWith({
+      parentSessionId: 'root',
+      childSessionId: 'grandchild',
+      mode: 'continuable',
+    })
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('代理当前不可中断或关闭')
+    expect(container.textContent).not.toContain('not-live')
+    unmount()
+  })
+
   it('interrupts and closes continuable agents with result feedback and close confirmation surviving refresh', async () => {
     fetchQueue = [
       {
@@ -587,7 +684,7 @@ describe('Run Dashboard view', () => {
       childSessionId: 'child',
       mode: 'continuable',
     })
-    expect(container.textContent).toContain('accepted')
+    expect(container.textContent).toContain('已请求中断代理')
 
     await act(async () => {
       ;(container.querySelector('button[aria-label="关闭 worker"]') as HTMLButtonElement).click()
@@ -608,7 +705,7 @@ describe('Run Dashboard view', () => {
       childSessionId: 'child',
       mode: 'continuable',
     }, expect.any(String))
-    expect(container.textContent).toContain('closed')
+    expect(container.textContent).toContain('代理已关闭')
     expect(container.textContent).not.toContain('restart')
     expect(container.textContent).not.toContain('重新运行')
     unmount()

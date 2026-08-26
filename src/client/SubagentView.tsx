@@ -465,6 +465,16 @@ function continuableAgentAddress(row: TimelineDisplayRow): SidebarContinuableSub
   return address?.mode === 'continuable' ? address as SidebarContinuableSubagentAddress : undefined
 }
 
+function rootScopedControlAddress(
+  rootSessionId: string | undefined,
+  row: TimelineDisplayRow,
+): SidebarContinuableSubagentAddress | undefined {
+  const address = continuableAgentAddress(row)
+  return address === undefined || rootSessionId === undefined
+    ? undefined
+    : { parentSessionId: rootSessionId, childSessionId: address.childSessionId, mode: 'continuable' }
+}
+
 function canInterruptAgent(row: TimelineDisplayRow): boolean {
   if (continuableAgentAddress(row) === undefined || row.state?.residency !== 'live') return false
   return row.state.turn.kind === 'running' || row.state.turn.kind === 'waiting'
@@ -493,6 +503,21 @@ function initialTaskUnavailableLabel(reason: UnavailableInitialTaskReason): stri
   return reason === 'not-accepted'
     ? t('runDashboardDetailTaskNotAccepted')
     : t('runDashboardDetailTaskSessionUnavailable')
+}
+
+function agentControlOutcomeLabel(action: AgentControlAction, outcome: SidebarSubagentControlOutcome): string {
+  if (outcome === 'accepted') {
+    return action === 'interrupt'
+      ? t('runDashboardControlInterruptAccepted')
+      : t('runDashboardControlCloseAccepted')
+  }
+  switch (outcome) {
+    case 'forbidden': return t('runDashboardControlForbidden')
+    case 'not-found': return t('runDashboardControlNotFound')
+    case 'not-live': return t('runDashboardControlNotLive')
+    case 'closed': return t('runDashboardControlClosed')
+    case 'failed': return t('runDashboardControlFailed')
+  }
 }
 
 function catalogSignature(
@@ -598,8 +623,10 @@ function RunDashboardTreeRow(props: {
         <span className={clsx(
           css.runDashboardControlResult,
           rowControl.kind === 'error' && css.runDashboardControlError,
-        )}>
-          {rowControl.kind === 'loading' ? t('loading') : rowControl.outcome}
+        )} role="status" aria-live="polite">
+          {rowControl.kind === 'loading'
+            ? t('loading')
+            : agentControlOutcomeLabel(rowControl.action, rowControl.outcome)}
         </span>
       )}
       <span className={css.runDashboardStatus}>{agentRowState(row)}</span>
@@ -878,7 +905,7 @@ export function SubagentView(props: {
   store?: SidebarStore
   onOpenChild?: (address: SidebarSubagentAddress) => void
 }) {
-  const { sessionId, active, ctx, store } = props
+  const { sessionId, active, ctx, store, onOpenChild } = props
   const sessions = ctx.sessions
   const [loadState, setLoadState] = useState<TimelineLoadState>({ kind: 'idle' })
   const [detailState, setDetailState] = useState<AgentDetailLoadState>({ kind: 'idle' })
@@ -969,32 +996,38 @@ export function SubagentView(props: {
   const openAgent = useCallback((row: TimelineDisplayRow): void => {
     const address = agentAddress(row)
     if (address === undefined) return
-    props.onOpenChild?.(address)
-    if (props.onOpenChild === undefined) ctx.sessions.openSubagent?.(address)
-  }, [ctx.sessions, props])
+    onOpenChild?.(address)
+    if (onOpenChild === undefined) ctx.sessions.openSubagent?.(address)
+  }, [ctx.sessions, onOpenChild])
 
   const runAgentControl = useCallback(async (
     action: AgentControlAction,
     row: TimelineDisplayRow,
   ): Promise<void> => {
-    const address = continuableAgentAddress(row)
+    const address = rootScopedControlAddress(rootId, row)
     if (address === undefined) {
       setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'not-found' })
-      return
-    }
-    const control = action === 'interrupt'
-      ? ctx.sessions.interruptSubagent
-      : ctx.sessions.closeSubagent
-    if (control === undefined) {
-      setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'failed' })
       return
     }
     setArmedCloseId(undefined)
     setControlState({ kind: 'loading', agentSessionId: row.id, action })
     try {
-      const outcome = action === 'interrupt'
-        ? await ctx.sessions.interruptSubagent!(address)
-        : await ctx.sessions.closeSubagent!(address, operationId())
+      let outcome: SidebarSubagentControlOutcome
+      if (action === 'interrupt') {
+        const interrupt = ctx.sessions.interruptSubagent
+        if (interrupt === undefined) {
+          setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'failed' })
+          return
+        }
+        outcome = await interrupt(address)
+      } else {
+        const close = ctx.sessions.closeSubagent
+        if (close === undefined) {
+          setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'failed' })
+          return
+        }
+        outcome = await close(address, operationId())
+      }
       setControlState({
         kind: outcome === 'accepted' || outcome === 'closed' ? 'done' : 'error',
         agentSessionId: row.id,
@@ -1004,7 +1037,7 @@ export function SubagentView(props: {
     } catch {
       setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'failed' })
     }
-  }, [ctx.sessions])
+  }, [ctx.sessions, rootId])
 
   const interruptAgent = useCallback((row: TimelineDisplayRow): void => {
     void runAgentControl('interrupt', row)
