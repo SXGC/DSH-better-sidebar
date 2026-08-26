@@ -154,3 +154,6 @@ registry/
 playwright-report/
 test-results/
 
+# Local coding workspaces
+.coding/changes/
+.worktrees/
