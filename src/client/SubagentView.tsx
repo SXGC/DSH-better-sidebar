@@ -487,6 +487,14 @@ function detailProperties(detail: AgentDetailResult): Array<readonly [string, st
   ]
 }
 
+type UnavailableInitialTaskReason = Extract<AgentDetailResult['initialTask'], { available: false }>['reason']
+
+function initialTaskUnavailableLabel(reason: UnavailableInitialTaskReason): string {
+  return reason === 'not-accepted'
+    ? t('runDashboardDetailTaskNotAccepted')
+    : t('runDashboardDetailTaskSessionUnavailable')
+}
+
 function catalogSignature(
   rootId: string | undefined,
   catalogs: Readonly<Record<string, SidebarSubagentCatalog>>,
@@ -537,7 +545,11 @@ function RunDashboardTreeRow(props: {
     <div
       role="row"
       aria-level={row.depth + 1}
-      className={clsx(css.runDashboardRow, row.kind === 'root' && css.runDashboardRootRow)}
+      className={clsx(
+        css.runDashboardRow,
+        row.kind === 'root' && css.runDashboardRootRow,
+        row.contextOnly && css.runDashboardContextRow,
+      )}
       style={{ paddingLeft: 10 + row.depth * 16 }}
     >
       <span className={css.runDashboardRowHeader}>
@@ -836,7 +848,7 @@ function AgentDetailPanel(props: {
             <span className={css.runDashboardDetailLabel}>{t('runDashboardDetailTask')}</span>
             {state.detail.initialTask.available
               ? <pre className={css.runDashboardTask}>{state.detail.initialTask.text}</pre>
-              : <div className={css.runDashboardDetailHint}>{t('runDashboardDetailTaskUnavailable')}</div>}
+              : <div className={css.runDashboardDetailHint}>{initialTaskUnavailableLabel(state.detail.initialTask.reason)}</div>}
           </div>
           <div className={css.runDashboardDetailSection}>
             <span className={css.runDashboardDetailLabel}>{t('runDashboardDetailProperties')}</span>
@@ -943,6 +955,16 @@ export function SubagentView(props: {
     detailRequestRef.current?.abort()
     setDetailState({ kind: 'idle' })
   }, [])
+
+  useEffect(() => () => { detailRequestRef.current?.abort() }, [])
+
+  const toggleAgentDetail = useCallback((agentSessionId: string): void => {
+    if (detailState.kind !== 'idle' && detailState.agentSessionId === agentSessionId) {
+      closeAgentDetail()
+      return
+    }
+    loadAgentDetail(agentSessionId)
+  }, [closeAgentDetail, detailState, loadAgentDetail])
 
   const openAgent = useCallback((row: TimelineDisplayRow): void => {
     const address = agentAddress(row)
@@ -1152,7 +1174,7 @@ export function SubagentView(props: {
               maxTreeWidth={maxTreeWidth}
               setTreeWidth={setTreeWidth}
               selectedAgentId={detailState.kind === 'idle' ? undefined : detailState.agentSessionId}
-              onSelectAgent={loadAgentDetail}
+              onSelectAgent={toggleAgentDetail}
               armedCloseId={armedCloseId}
               controlState={controlState}
               onOpenAgent={openAgent}

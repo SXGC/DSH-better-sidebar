@@ -100,6 +100,7 @@ export function filterTimelineDisplay(display: TimelineDisplay, filters: Timelin
   if (normalized === null) return display
 
   const keep = new Set<number>([0])
+  const matches = new Set<number>()
   const ancestors: number[] = []
   for (let index = 0; index < display.rows.length; index += 1) {
     const row = display.rows[index]!
@@ -107,13 +108,21 @@ export function filterTimelineDisplay(display: TimelineDisplay, filters: Timelin
     ancestors.length = row.depth + 1
     if (index === 0) continue
     if (!rowMatchesFilters(row, normalized)) continue
+    matches.add(index)
     for (let depth = 0; depth <= row.depth; depth += 1) {
       const ancestorIndex = ancestors[depth]
       if (ancestorIndex !== undefined) keep.add(ancestorIndex)
     }
   }
 
-  return { ...display, rows: display.rows.filter((_, index) => keep.has(index)) }
+  return {
+    ...display,
+    rows: display.rows
+      .map((row, index) => keep.has(index)
+        ? { ...row, contextOnly: index !== 0 && !matches.has(index) }
+        : undefined)
+      .filter((row): row is TimelineDisplayRow => row !== undefined),
+  }
 }
 
 function rootDisplayRow(
@@ -167,7 +176,7 @@ function agentDisplayRow(row: AgentTimelineRow, depth: number, now: number, long
     activeDurationMs: durationOf(segments, now, 'active'),
     wallDurationMs: durationOf(segments, now, 'wall'),
     contextOnly: false,
-    longRunning: isLongRunning(row, segments, now, longRunningMinutes),
+    longRunning: isLongRunning(segments, now, longRunningMinutes),
   }
 }
 
@@ -307,7 +316,6 @@ function durationOf(segments: readonly TimelineSegment[], now: number, mode: 'ac
 }
 
 function isLongRunning(
-  row: AgentTimelineRow,
   segments: readonly TimelineSegment[],
   now: number,
   longRunningMinutes: number,

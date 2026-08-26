@@ -232,6 +232,10 @@
   background: var(--dsw-alias-interactive-bg-active);
 }
 
+.runDashboardContextRow {
+  opacity: 0.68;
+}
+
 .runDashboardLane {
   position: relative;
 }

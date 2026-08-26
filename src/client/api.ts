@@ -7,7 +7,7 @@
  * request). Failures surface as {@link SidebarApiError} with the wire code.
  */
 import { encodeHtmlUrl } from '../html-route.ts'
-import type { AgentDetailResult, AgentTimelineResult } from '../agent-timeline-routes.ts'
+import type { AgentDetailResult, AgentTimelineResult, SpawnModelSelection } from '../agent-timeline-routes.ts'
 import type { BrowserProbeResult } from './browser.ts'
 
 /** One wire failure. */
@@ -130,6 +130,32 @@ function scopePayload(scope: SessionScope, extra: Record<string, unknown>): Reco
   return { sessionId: scope.sessionId, ...(scope.cwd !== undefined && scope.cwd !== '' ? { cwd: scope.cwd } : {}), ...extra }
 }
 
+function sanitizeModelSelection(selection: SpawnModelSelection): SpawnModelSelection {
+  return {
+    provider: selection.provider,
+    model: selection.model,
+    ...(selection.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {}),
+    ...(selection.serviceTier !== undefined ? { serviceTier: selection.serviceTier } : {}),
+  }
+}
+
+function sanitizeAgentDetail(detail: AgentDetailResult): AgentDetailResult {
+  return {
+    sessionId: detail.sessionId,
+    initialTask: detail.initialTask.available
+      ? { available: true, text: detail.initialTask.text }
+      : { available: false, reason: detail.initialTask.reason },
+    backend: detail.backend,
+    forkTurns: detail.forkTurns,
+    requestedModelSelection: sanitizeModelSelection(detail.requestedModelSelection),
+    effectiveModelSelection: sanitizeModelSelection(detail.effectiveModelSelection),
+    allowedTools: [...detail.allowedTools],
+    sandboxMode: detail.sandboxMode,
+    approvalPolicy: detail.approvalPolicy,
+    filesystemPolicy: detail.filesystemPolicy,
+  }
+}
+
 /** The sidebar API surface (session scope threaded through every call). */
 export const api = {
   sessionCwd: (scope: SessionScope, signal?: AbortSignal) =>
@@ -207,7 +233,7 @@ export const api = {
     call<AgentTimelineResult>('agents.timeline', scopePayload(scope, {}), signal),
   /** Whitelisted detail for one native descendant agent. */
   agentDetail: (scope: SessionScope, agentSessionId: string, signal?: AbortSignal) =>
-    call<AgentDetailResult>('agents.detail', scopePayload(scope, { agentSessionId }), signal),
+    call<AgentDetailResult>('agents.detail', scopePayload(scope, { agentSessionId }), signal).then(sanitizeAgentDetail),
   /** The effective terminal shell and its display name (plugin-global). */
   shellGet: () =>
     call<{ shell: string; name: string }>('shell.get', {}),

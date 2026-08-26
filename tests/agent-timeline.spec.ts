@@ -221,6 +221,9 @@ describe('agent timeline client projection', () => {
     })
 
     expect(ids(filtered.rows)).toEqual(['root', 'parent', 'match'])
+    expect(filtered.rows.find(row => row.id === 'root')?.contextOnly).toBe(false)
+    expect(filtered.rows.find(row => row.id === 'parent')?.contextOnly).toBe(true)
+    expect(filtered.rows.find(row => row.id === 'match')?.contextOnly).toBe(false)
     expect(filtered.rows.find(row => row.id === 'parent')?.longRunning).toBe(false)
     expect(filtered.rows.find(row => row.id === 'match')?.longRunning).toBe(true)
   })

@@ -116,11 +116,12 @@ function baseSnapshot(): SidebarSessionList {
 
 let fetchQueue: AgentTimelineResult[]
 let detailQueue: AgentDetailResult[]
+let detailFailures: number
 const fetchCalls: string[] = []
 
 beforeEach(() => {
   fetchQueue = [baseTimeline]
-  detailQueue = [{
+  const detail: AgentDetailResult = {
     sessionId: 'child',
     initialTask: { available: true, text: 'build <strong>needle</strong>\nsecond block' },
     backend: 'subagent-next',
@@ -131,7 +132,9 @@ beforeEach(() => {
     sandboxMode: 'workspace-write',
     approvalPolicy: 'never',
     filesystemPolicy: 'closed',
-  }]
+  }
+  detailQueue = [detail, detail]
+  detailFailures = 0
   fetchCalls.length = 0
   vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
     const method = String(url).split('/').pop() ?? ''
@@ -144,6 +147,14 @@ beforeEach(() => {
       } as unknown as Response
     }
     if (method === 'agents.detail') {
+      if (detailFailures > 0) {
+        detailFailures -= 1
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ ok: false, error: { code: 'internal', message: 'detail temporarily unavailable' } }),
+        } as unknown as Response
+      }
       return {
         ok: true,
         status: 200,
@@ -435,6 +446,21 @@ describe('Run Dashboard view', () => {
     expect(container.textContent).not.toContain('credentialRef')
     expect(container.textContent).not.toContain('operationId')
 
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="查看详情 worker"]') as HTMLButtonElement).click()
+    })
+
+    expect(fetchCalls).toEqual(['agents.timeline', 'agents.detail'])
+    expect(container.textContent).not.toContain('build <strong>needle</strong>')
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="查看详情 worker"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(fetchCalls).toEqual(['agents.timeline', 'agents.detail', 'agents.detail'])
+    expect(container.textContent).toContain('build <strong>needle</strong>')
+
     const nextList = baseSnapshot()
     nextList.current = 'other'
     nextList.byId = { other: { id: 'other', displayTitle: 'Other root', running: true } }
@@ -447,6 +473,7 @@ describe('Run Dashboard view', () => {
   })
 
   it('shows task-unavailable detail state and lets the user retry failed detail reads', async () => {
+    detailFailures = 1
     detailQueue = [{
       sessionId: 'child',
       initialTask: { available: false, reason: 'not-accepted' },
@@ -472,7 +499,15 @@ describe('Run Dashboard view', () => {
     })
     await act(async () => {})
 
-    expect(container.textContent).toContain('任务不可用')
+    expect(container.textContent).toContain('detail temporarily unavailable')
+    await act(async () => {
+      const retry = [...container.querySelectorAll('button')].find(button => button.textContent === '重试')
+      expect(retry).toBeDefined()
+      retry!.click()
+    })
+    await act(async () => {})
+
+    expect(container.textContent).toContain('初始任务不可用（创建前失败）')
     unmount()
   })
 
