@@ -46,6 +46,7 @@ import {
 } from './pty-deps.ts'
 import { registerTools } from './tools.ts'
 import { buildJobsApi, type SidebarJobsRoutes } from './jobs-routes.ts'
+import { buildAgentTimelineApi, type SidebarAgentTimelineRoutes } from './agent-timeline-routes.ts'
 import { readJsonBody, requireString, SidebarError, writeError, writeJson, writeOk } from './wire.ts'
 
 export { Config }
@@ -232,6 +233,7 @@ function buildApi(
   // job_output cursor is never consumed) and kill (the registry's stock
   // API). A deployment without the jobs registry downgrades kill to a 503.
   const jobsApi: SidebarJobsRoutes = buildJobsApi(ctx, resolved.readLimit)
+  const agentTimelineApi: SidebarAgentTimelineRoutes = buildAgentTimelineApi(ctx)
   return {
     'session.cwd': (payload) => {
       const { sessionId, cwd } = cwdOf(payload)
@@ -386,6 +388,8 @@ function buildApi(
     // exists. Kill is fenced to the owning session by the jobs registry.
     'jobs.output': (payload) => jobsApi.output(payload),
     'jobs.kill': (payload) => jobsApi.kill(payload),
+    'agents.timeline': (payload) => agentTimelineApi.timeline(payload),
+    'agents.detail': (payload) => agentTimelineApi.detail(payload),
     // The effective terminal shell and its display name. The client uses
     // this to title terminal tabs with the shell name instead of a numbered
     // "Terminal N" label; the shell itself is configured through

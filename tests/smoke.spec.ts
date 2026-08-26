@@ -385,7 +385,7 @@ describe('session cwd resolution over the API route', () => {
     route: SidebarWebRoute,
     method: string,
     payload: unknown,
-  ): Promise<{ ok: boolean; value?: { cwd: string }; error?: { message: string } }> => {
+  ): Promise<{ ok: boolean; value?: { cwd: string }; error?: { message: string }; headers?: Record<string, string> }> => {
     const body = Buffer.from(JSON.stringify(payload))
     const req = {
       method: 'POST',
@@ -393,19 +393,26 @@ describe('session cwd resolution over the API route', () => {
       headers: { host: '127.0.0.1:3080' },
       [Symbol.asyncIterator]: async function* () { yield body },
     } as never
-    const out: { status: number; body: string } = { status: 200, body: '' }
+    const out: { status: number; body: string; headers: Record<string, string> } = { status: 200, body: '', headers: {} }
     const res = {
-      writeHead: (status: number) => { out.status = status },
+      writeHead: (status: number, headers?: Record<string, string>) => {
+        out.status = status
+        out.headers = headers ?? {}
+      },
       end: (chunk: unknown) => { out.body += String(chunk ?? '') },
     } as never
     await route.handler(req, res)
-    return JSON.parse(out.body) as { ok: boolean; value?: { cwd: string }; error?: { message: string } }
+    return {
+      ...(JSON.parse(out.body) as { ok: boolean; value?: { cwd: string }; error?: { message: string } }),
+      headers: out.headers,
+    }
   }
 
   it('uses the client summary cwd while the session is detached', async () => {
     const route = mount()
     const result = await invoke(route, 'session.cwd', { sessionId: 's-detached', cwd: '/tmp/summary-cwd' })
     expect(result.ok).toBe(true)
+    expect(result.headers?.['cache-control']).toBe('no-store')
     // The summary cwd passes through requireAbsolute (platform resolve), so
     // the expectation follows the platform's own normalization.
     expect(result.value?.cwd).toBe(resolvePath('/tmp/summary-cwd'))

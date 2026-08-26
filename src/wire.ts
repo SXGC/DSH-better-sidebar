@@ -12,6 +12,7 @@ export type SidebarErrorCode =
   | 'not-found'
   | 'forbidden'
   | 'method-error'
+  | 'agent-error'
   | 'fs-error'
   | 'git-error'
   | 'pty-error'
@@ -67,7 +68,7 @@ export async function readJsonBody(req: SidebarHttpRequest): Promise<unknown> {
 /** Write a JSON response with the given status. */
 export function writeJson(res: SidebarHttpResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body)
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   res.end(payload)
 }
 

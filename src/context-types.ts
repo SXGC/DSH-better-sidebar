@@ -76,7 +76,10 @@ export interface SidebarWebServer {
 
 /** A published session's header slice the sidebar reads (authoritative cwd). */
 export interface SidebarSessionHeader {
+  id?: string
+  createdAt?: number
   cwd?: string
+  parentSession?: string
 }
 
 /** The host session store face (`ctx.sessions.get(id)` returns the live session). */
