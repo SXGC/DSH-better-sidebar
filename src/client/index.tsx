@@ -88,7 +88,9 @@ export function apply(ctx: Context): void {
   // file previewers through `ctx.betterSidebar.registerTab/registerFileViewer`.
   // Published before the panel mounts so consumers injecting 'betterSidebar'
   // are ready by the time the sidebar renders.
-  const service = createBetterSidebarService(sidebarStore)
+  const service = createBetterSidebarService(sidebarStore, {
+    openRightSidebar: () => { ctx.layout.openRightSidebar() },
+  })
   ctx.provide('betterSidebar', service)
   // Terminal tab titles use the host's effective shell name (e.g. bash/zsh)
   // instead of "Terminal 1". Start with a safe fallback and replace it as

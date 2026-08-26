@@ -103,7 +103,9 @@ describe('official right-sidebar occupant', () => {
     })
     expect(container.querySelectorAll('button')).toHaveLength(1)
     const cluster = container.querySelector<HTMLElement>('[data-dsh-better-sidebar-toggles]')
-    expect(cluster?.style.right).toBe('10px')
+    // Desktop collapsed: 68px clearance keeps the cluster left of the Session
+    // header's More trigger.
+    expect(cluster?.style.right).toBe('68px')
     const rightToggle = container.querySelector<HTMLButtonElement>('button[aria-label="Expand sidebar"]')
     expect(rightToggle).not.toBeNull()
     act(() => { rightToggle?.click() })
@@ -111,7 +113,7 @@ describe('official right-sidebar occupant', () => {
 
     act(() => { owner.publish({ collapsed: false, width: 360 }) })
     expect(container.querySelectorAll('button')).toHaveLength(2)
-    expect(cluster?.style.right).toBe('370px')
+    expect(cluster?.style.right).toBe('428px')
     const bottomToggle = container.querySelector<HTMLButtonElement>('button[aria-label="Expand bottom panel"]')
     expect(bottomToggle).not.toBeNull()
     act(() => { bottomToggle?.click() })

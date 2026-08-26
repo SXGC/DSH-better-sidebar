@@ -36,10 +36,13 @@
 
 /* The persistent expand/collapse cluster: two rail controls side by side
    (bottom panel's glyph LEFT of the right panel's). ToggleCluster supplies
-   the live inline `right` offset: 10px while closed, or the official owner's
-   width + 10px on an open desktop track. Keeping the controls just outside
-   the fourth track makes them reachable without trying to out-stack the
-   AppFrame column from inside shell.overlay's stacking context. */
+   the live inline `right` offset: on desktop a 68px clearance that keeps the
+   cluster left of the Session header's More trigger (28px trailing padding +
+   32px trigger + 8px gap), plus the official owner's width on an open track;
+   10px on mobile, where the header already reserves the trailing strip.
+   Keeping the controls just outside the fourth track makes them reachable
+   without trying to out-stack the AppFrame column from inside shell.overlay's
+   stacking context. */
 .toggleCluster {
   position: fixed;
   /* env() resolves to 0 on devices without a top inset (desktops). */

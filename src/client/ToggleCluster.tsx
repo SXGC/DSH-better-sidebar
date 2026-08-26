@@ -15,6 +15,15 @@ export interface ToggleClusterProps {
   toggleRightSidebar: () => void
 }
 
+/**
+ * Desktop trailing clearance: the official Session header owns the trailing
+ * 60px of the conversation column (28px padding + the 32px More trigger), so
+ * the cluster stays one 8px gap further left instead of covering it. Mobile
+ * keeps the bare offset — the mobile header already reserves the trailing
+ * 56px for shell controls.
+ */
+const DESKTOP_TRAILING_CLEARANCE = 68
+
 /** Context-free controls contributed to the official click-through shell overlay. */
 export function ToggleCluster(props: ToggleClusterProps) {
   const { store, layoutSnapshot, ownerSnapshot, localeSnapshot, toggleRightSidebar } = props
@@ -39,7 +48,11 @@ export function ToggleCluster(props: ToggleClusterProps) {
     <div
       className={css.toggleCluster}
       data-dsh-better-sidebar-toggles=""
-      style={{ right: layout.mode === 'desktop' && !owner.collapsed ? owner.width + 10 : 10 }}
+      style={{
+        right: layout.mode === 'desktop'
+          ? DESKTOP_TRAILING_CLEARANCE + (owner.collapsed ? 0 : owner.width)
+          : 10,
+      }}
     >
       {layout.mode === 'desktop' && !owner.collapsed && (
         <Tooltip label={sidebar.state?.bottomOpen ? t('collapseBottomPanel') : t('expandBottomPanel')} side="bottom" delayMs={500}>

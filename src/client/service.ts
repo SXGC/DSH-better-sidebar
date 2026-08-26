@@ -499,6 +499,12 @@ export const SIDEBAR_FEATURES = [
   'settingSelect',
 ] as const
 
+/** Official layout actions used when service opens must become visible. */
+export interface BetterSidebarServiceHost {
+  /** Expand the official right-sidebar track for a current-session content open. */
+  openRightSidebar?: () => void
+}
+
 /** Run one plugin callback; a throw is logged and never breaks the caller. */
 function safeCall(fn: () => void): void {
   try {
@@ -510,10 +516,17 @@ function safeCall(fn: () => void): void {
 
 /**
  * Create one BetterSidebar service bound to a store. The service owns the
- * tab/viewer registries (Map + listener set) and proxies openTab/closeTab
- * to the store's reducer. One instance per client plugin activation.
+ * tab/viewer registries (Map + listener set), proxies openTab/closeTab to
+ * the store's reducer, and asks the official layout to reveal current-session
+ * content opens. One instance per client plugin activation.
+ * @param store - Per-activation sidebar state.
+ * @param host - Official layout actions supplied by the client plugin.
+ * @returns The sidebar registry and tab-control service.
  */
-export function createBetterSidebarService(store: SidebarStore): BetterSidebarService {
+export function createBetterSidebarService(
+  store: SidebarStore,
+  host: BetterSidebarServiceHost = {},
+): BetterSidebarService {
   const tabs = new Map<string, TabDescriptor>()
   const viewers = new Map<string, FileViewerDescriptor>()
   const listeners = new Set<() => void>()
@@ -618,6 +631,7 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
     // dedupe/id-safety-net focus is an ACTIVATION, not an open).
     let created: SidebarTab | undefined
     let activated: SidebarTab | undefined
+    let revealRightSidebar = false
     const reducer = (state: SidebarState): SidebarState => {
       // Let the descriptor mint the tab (terminal's nextTerminal bump, etc.).
       let tab: SidebarTab
@@ -697,6 +711,7 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
         && typeof window !== 'undefined'
         && (seed.path !== undefined || seed.url !== undefined)
       ) {
+        revealRightSidebar = true
         if (isNarrowWidth(window.innerWidth)) {
           if (!landed.panelOpen) return togglePanel(landed)
         } else {
@@ -718,6 +733,7 @@ export function createBetterSidebarService(store: SidebarStore): BetterSidebarSe
     } else {
       store.reduce(reducer)
     }
+    if (revealRightSidebar) host.openRightSidebar?.()
     if (created !== undefined) safeCall(() => descriptor.onOpen?.(created!, callbackScope))
     else if (activated !== undefined) safeCall(() => descriptor.onActivate?.(activated!, callbackScope))
   }

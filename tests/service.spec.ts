@@ -2,7 +2,7 @@
  * Tests for the BetterSidebar service registry: register/dispose lifecycle,
  * matchFileViewer priority/exts/detect algorithm, and openTab dedupe.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
 // Mock browser globals (SidebarStore.reduce → schedulePersist uses window.setTimeout)
 const g = globalThis as Record<string, unknown>
@@ -574,23 +574,27 @@ describe('service.openTab auto-expand for content opens', () => {
 
   it('expands the collapsed right panel for a path (file) open on a wide viewport', () => {
     const store = createSidebarStore()
-    const service = createBetterSidebarService(store)
+    const openRightSidebar = vi.fn()
+    const service = createBetterSidebarService(store, { openRightSidebar })
     service.registerTab({ id: 'editor', title: 'Editor', component: () => null })
     store.setSession('s1')
     collapseRightPanel(store)
     service.openTab({ type: 'editor', title: 'main.ts', path: '/p/main.ts' })
     const state = store.getSnapshot().state!
+    expect(openRightSidebar).toHaveBeenCalledOnce()
     expect(state.panelOpen).toBe(true)
     expect(allLeaves(state.splits).flatMap(l => l.tabs).some(t => t.type === 'editor')).toBe(true)
   })
 
   it('expands the collapsed right panel for a URL (browser) open on a wide viewport', () => {
     const store = createSidebarStore()
-    const service = createBetterSidebarService(store)
+    const openRightSidebar = vi.fn()
+    const service = createBetterSidebarService(store, { openRightSidebar })
     service.registerTab({ id: 'browser', title: 'Browser', component: () => null })
     store.setSession('s1')
     collapseRightPanel(store)
     service.openTab({ type: 'browser', url: 'https://example.com', title: 'example.com' })
+    expect(openRightSidebar).toHaveBeenCalledOnce()
     expect(store.getSnapshot().state!.panelOpen).toBe(true)
   })
 
@@ -611,11 +615,13 @@ describe('service.openTab auto-expand for content opens', () => {
 
   it('keeps a collapsed panel for a type-only open on a wide viewport', () => {
     const store = createSidebarStore()
-    const service = createBetterSidebarService(store)
+    const openRightSidebar = vi.fn()
+    const service = createBetterSidebarService(store, { openRightSidebar })
     service.registerTab({ id: 'explorer', title: 'Explorer', component: () => null })
     store.setSession('s1')
     collapseRightPanel(store)
     service.openTab({ type: 'explorer', title: 'Explorer' })
+    expect(openRightSidebar).not.toHaveBeenCalled()
     expect(store.getSnapshot().state?.panelOpen).toBe(false)
   })
 
@@ -1000,12 +1006,14 @@ describe('independent CR follow-up fixes', () => {
 
   it('a targeted open into an INACTIVE session never auto-expands its panels', () => {
     const store = createSidebarStore()
-    const service = createBetterSidebarService(store)
+    const openRightSidebar = vi.fn()
+    const service = createBetterSidebarService(store, { openRightSidebar })
     service.registerTab({ id: 'editor', title: 'Editor', component: () => null })
     store.setSession('s1')
     // The target session starts collapsed.
     store.reduceFor('s2', s => ({ ...s, panelOpen: false, bottomOpen: false }))
     service.openTab({ type: 'editor', title: 'main.ts', path: '/p/main.ts' }, { sessionId: 's2' })
+    expect(openRightSidebar).not.toHaveBeenCalled()
     // Nothing is in sight for the user — the open must not expand s2.
     store.setSession('s2')
     expect(store.getSnapshot().state?.panelOpen).toBe(false)
