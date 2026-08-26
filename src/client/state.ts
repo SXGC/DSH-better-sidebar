@@ -87,6 +87,8 @@ export interface SidebarState {
   /** The bottom panel's own split tree (panes/tabs live only in ONE tree;
    *  tabs never cross panels — the two panels only share panel-size drags). */
   bottomSplits: SplitNode
+  /** Run Dashboard tree column width in px, persisted per session. */
+  runDashboardTreeWidth: number
 }
 
 export const PANEL_MIN = 280
@@ -97,6 +99,7 @@ export const TAB_MAX_WIDTH = 160
  * bound is the viewport, enforced by {@link setBottomHeight}). */
 export const BOTTOM_MIN = 120
 export const BOTTOM_DEFAULT = 220
+export const RUN_DASHBOARD_TREE_MIN = 128
 
 let nextIdCounter = 0
 /** Unique pane/tab id within one state instance. */
@@ -181,7 +184,17 @@ export function makeDefaultState(width = PANEL_DEFAULT, panelOpen = true, seed: 
     bottomHeight: BOTTOM_DEFAULT,
     bottomOpenedOnce: false,
     bottomSplits: bottomLeaf,
+    runDashboardTreeWidth: defaultRunDashboardTreeWidth(width),
   }
+}
+
+export function defaultRunDashboardTreeWidth(panelWidth: number): number {
+  return clampRunDashboardTreeWidth(panelWidth * 0.45, panelWidth)
+}
+
+export function clampRunDashboardTreeWidth(width: number, panelWidth: number): number {
+  const max = Math.max(RUN_DASHBOARD_TREE_MIN, Math.round(panelWidth) - RUN_DASHBOARD_TREE_MIN)
+  return Math.min(max, Math.max(RUN_DASHBOARD_TREE_MIN, Math.round(width)))
 }
 
 /** Whether a tree node (or any descendant) carries the given pane/split id. */
@@ -843,9 +856,10 @@ export function sanitizeState(parsed: unknown): SidebarState | undefined {
   const bottomSplits = sanitizeNode(record.bottomSplits, seen, reid)
     ?? { kind: 'leaf' as const, id: uid('pane'), tabs: [], active: null }
   const maxWidth = typeof window !== 'undefined' ? window.innerWidth : Infinity
+  const width = Math.max(PANEL_MIN, Math.min(record.width, maxWidth))
   return {
     panelOpen: record.panelOpen,
-    width: Math.max(PANEL_MIN, Math.min(record.width, maxWidth)),
+    width,
     // A stale duplicate pane id may have been re-ided; follow the rename so
     // new tabs still land in the pane the user was using.
     activePane: typeof record.activePane === 'string' ? (reid.get(record.activePane) ?? record.activePane) : null,
@@ -860,6 +874,12 @@ export function sanitizeState(parsed: unknown): SidebarState | undefined {
     // auto-terminal exactly once after the upgrade.
     bottomOpenedOnce: record.bottomOpenedOnce === true,
     bottomSplits,
+    runDashboardTreeWidth: clampRunDashboardTreeWidth(
+      typeof record.runDashboardTreeWidth === 'number' && Number.isFinite(record.runDashboardTreeWidth)
+        ? record.runDashboardTreeWidth
+        : defaultRunDashboardTreeWidth(width),
+      width,
+    ),
   }
 }
 

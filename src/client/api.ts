@@ -7,6 +7,7 @@
  * request). Failures surface as {@link SidebarApiError} with the wire code.
  */
 import { encodeHtmlUrl } from '../html-route.ts'
+import type { AgentTimelineResult } from '../agent-timeline-routes.ts'
 import type { BrowserProbeResult } from './browser.ts'
 
 /** One wire failure. */
@@ -201,6 +202,9 @@ export const api = {
       id,
       ...(reason !== undefined ? { reason } : {}),
     })),
+  /** Recoverable root + descendant agent timeline for the Run Dashboard. */
+  agentTimeline: (scope: SessionScope, signal?: AbortSignal) =>
+    call<AgentTimelineResult>('agents.timeline', scopePayload(scope, {}), signal),
   /** The effective terminal shell and its display name (plugin-global). */
   shellGet: () =>
     call<{ shell: string; name: string }>('shell.get', {}),

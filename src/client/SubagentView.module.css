@@ -59,176 +59,6 @@
   padding: 2px 6px 8px;
 }
 
-/* One node card: state dot + label + secondary + (running) live lines. */
-.subagentRow {
-  position: relative;
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 50px;
-  padding: 7px 8px 7px 11px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  font: var(--dsw-font-s-14);
-  color: var(--dsw-alias-label-primary);
-  text-align: left;
-  cursor: pointer;
-  outline: none;
-}
-
-.subagentRow:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-/* Keyboard focus (mirror of the official catalog row): a visible fill only
-   when focused via keyboard; the selected state below still wins on top. */
-.subagentRow:focus-visible {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-/* The currently-open session, highlighted in place (mirror of the workspace
-   `.sessionRow.selected` — declared after the hover/focus rules so it wins). */
-.subagentRowActive,
-.subagentRowActive:hover,
-.subagentRowActive:focus-visible {
-  background: var(--dsw-alias-interactive-bg-active);
-}
-
-.subagentRowDisabled {
-  color: var(--dsw-alias-label-dimmed);
-  cursor: not-allowed;
-}
-
-.subagentRowDisabled:hover {
-  background: transparent;
-}
-
-/* Loading placeholders are disabled but keep the default cursor (official
-   `.loadingRow` distinction from `.disabled`). */
-.subagentRowLoading {
-  cursor: default;
-}
-
-/* The state dot aligns to the first text line (official catalog detail). */
-.subagentDot {
-  margin-top: 4px;
-}
-
-.subagentContent {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  gap: 2px;
-}
-
-.subagentLabel,
-.subagentSecondary {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.subagentLabel {
-  color: inherit;
-  font-weight: 400;
-}
-
-.subagentSecondary {
-  font: var(--dsw-font-xxxs-11);
-  color: var(--dsw-alias-label-tertiary);
-}
-
-/* ── Live lines (running cards only) ──────────────────────────────────── */
-
-.subagentLive {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-  min-width: 0;
-  font: var(--dsw-font-xxxs-11);
-  color: var(--dsw-alias-label-tertiary);
-  overflow: hidden;
-}
-
-.subagentLiveTool {
-  flex: none;
-  font: var(--dsw-font-xxxs-strong-11);
-  color: var(--dsw-alias-label-secondary);
-}
-
-.subagentLiveArgs {
-  min-width: 0;
-  font-family: var(--ds-font-family-code);
-  font-size: var(--dsw-font-xxxs-11-font-size);
-  line-height: var(--dsw-font-xxxs-11-line-height);
-  color: var(--dsw-alias-label-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.subagentLiveText {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  font: var(--dsw-font-xxxs-11);
-  color: var(--dsw-alias-label-secondary);
-}
-
-/* ── Tree connector lines (official catalog recipe) ────────────────────── */
-
-.subagentNode {
-  position: relative;
-  min-width: 0;
-}
-
-.subagentChildren {
-  position: relative;
-  margin-left: 18px;
-  padding-left: 4px;
-}
-
-.subagentChildren::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: -26px;
-  height: 26px;
-  border-left: 1px solid var(--dsw-alias-border-l2);
-}
-
-.subagentChildren[aria-busy='true']::before {
-  content: none;
-}
-
-.subagentChildren > .subagentNode::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -4px;
-  border-left: 1px solid var(--dsw-alias-border-l2);
-}
-
-.subagentChildren > .subagentNode:last-child::before {
-  bottom: auto;
-  height: 17px;
-}
-
-.subagentChildren > .subagentNode > .subagentRow::before {
-  content: '';
-  position: absolute;
-  top: 16px;
-  left: -4px;
-  width: 14px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
-}
-
 .subagentEmpty {
   display: flex;
   flex-direction: column;
@@ -272,6 +102,180 @@
 .subagentErrorRetry:hover {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
+}
+
+/* ── Run Dashboard tree-gantt ─────────────────────────────────────────── */
+
+.runDashboardToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 0 2px 6px;
+}
+
+.runDashboardToolbar button {
+  height: 24px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+  cursor: pointer;
+}
+
+.runDashboardToolbar button:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.runDashboardGrid {
+  display: grid;
+  grid-template-columns: auto 6px minmax(0, 1fr);
+  min-height: 0;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.runDashboardTree {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 128px;
+  background: var(--dsw-alias-bg-base);
+  border-right: 1px solid var(--dsw-alias-border-l1);
+}
+
+.runDashboardSplitter {
+  width: 6px;
+  background: var(--dsw-alias-bg-base);
+  cursor: col-resize;
+  outline: none;
+}
+
+.runDashboardSplitter:hover,
+.runDashboardSplitter:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.runDashboardTimeline {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.runDashboardCanvas {
+  position: relative;
+  min-width: 100%;
+}
+
+.runDashboardScale {
+  display: flex;
+  justify-content: space-between;
+  height: 24px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  font: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.runDashboardRow,
+.runDashboardLane {
+  min-height: 64px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.runDashboardRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+}
+
+.runDashboardRootRow {
+  background: var(--dsw-alias-interactive-bg-active);
+}
+
+.runDashboardLane {
+  position: relative;
+}
+
+.runDashboardRowTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--dsw-font-s-14);
+  color: var(--dsw-alias-label-primary);
+}
+
+.runDashboardStatus,
+.runDashboardMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.runDashboardStatus {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.runDashboardSegment {
+  position: absolute;
+  top: 20px;
+  display: block;
+  min-width: 10px;
+  height: 20px;
+  overflow: hidden;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  padding: 0 6px;
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-strong-11);
+  line-height: 18px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.segment_cold {
+  background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 18%, transparent);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.segment_closed,
+.segment_completed,
+.segment_interrupted {
+  background: color-mix(in srgb, var(--dsw-alias-label-secondary) 12%, transparent);
+}
+
+.segment_running,
+.segment_waiting,
+.segment_provisioning {
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent);
+}
+
+.segment_errored {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.runDashboardMobile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.runDashboardMobileRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
 }
 
 /* ── Background-job section (below the topology tree) ────────────────── */
