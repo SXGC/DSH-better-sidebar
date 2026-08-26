@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 import { SubagentView } from '../src/client/SubagentView.tsx'
 import { createSidebarStore } from '../src/client/state.ts'
-import type { AgentTimelineResult } from '../src/agent-timeline-routes.ts'
+import type { AgentDetailResult, AgentTimelineResult } from '../src/agent-timeline-routes.ts'
 import type { Context, SidebarSessionList } from '../src/context-types.ts'
 
 function makeList(initial: SidebarSessionList) {
@@ -48,13 +48,16 @@ function makeCtx(list: ListStore, history: () => void = () => {}): Context {
   } as unknown as Context
 }
 
-function mount(node: ReactNode): { container: HTMLDivElement; unmount: () => void } {
+function mount(node: ReactNode): { container: HTMLDivElement; render: (next: ReactNode) => void; unmount: () => void } {
   const container = document.createElement('div')
   document.body.append(container)
   const root: Root = createRoot(container)
   act(() => { root.render(node) })
   return {
     container,
+    render: (next: ReactNode) => {
+      act(() => { root.render(next) })
+    },
     unmount: () => {
       act(() => { root.unmount() })
       container.remove()
@@ -107,10 +110,23 @@ function baseSnapshot(): SidebarSessionList {
 }
 
 let fetchQueue: AgentTimelineResult[]
+let detailQueue: AgentDetailResult[]
 const fetchCalls: string[] = []
 
 beforeEach(() => {
   fetchQueue = [baseTimeline]
+  detailQueue = [{
+    sessionId: 'child',
+    initialTask: { available: true, text: 'build <strong>needle</strong>\nsecond block' },
+    backend: 'subagent-next',
+    forkTurns: 'none',
+    requestedModelSelection: { provider: 'deepseek', model: 'gpt-5.5', reasoningEffort: 'high' },
+    effectiveModelSelection: { provider: 'deepseek', model: 'gpt-5.5' },
+    allowedTools: ['bash', 'read'],
+    sandboxMode: 'workspace-write',
+    approvalPolicy: 'never',
+    filesystemPolicy: 'closed',
+  }]
   fetchCalls.length = 0
   vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
     const method = String(url).split('/').pop() ?? ''
@@ -120,6 +136,13 @@ beforeEach(() => {
         ok: true,
         status: 200,
         json: async () => ({ ok: true, value: fetchQueue.shift() ?? baseTimeline }),
+      } as unknown as Response
+    }
+    if (method === 'agents.detail') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, value: detailQueue.shift() ?? detailQueue[0] }),
       } as unknown as Response
     }
     throw new Error(`unexpected fetch ${String(url)} ${String(init?.body)}`)
@@ -308,6 +331,143 @@ describe('Run Dashboard view', () => {
     expect(container.querySelector('[data-timeline-scroller]')).toBeNull()
     expect(container.textContent).toContain('segments')
     expect(container.textContent).toContain('active')
+    unmount()
+  })
+
+  it('filters by status, model, path, text, and long-running while keeping ancestors', async () => {
+    fetchQueue = [{
+      root: { sessionId: 'root', path: '/root', startedAt: 1_000, lastEventAt: 2_000 },
+      asOfSeq: 20,
+      agents: [
+        {
+          sessionId: 'parent',
+          parentSessionId: 'root',
+          path: '/root/parent',
+          mode: 'continuable',
+          label: 'parent',
+          state: { residency: 'live', turn: { kind: 'idle' } },
+          modelSelection: { provider: 'deepseek', model: 'gpt-5.5' },
+          hasChildren: true,
+          declaredAt: 1_000,
+          declarationSeq: 1,
+          statePoints: [{ seq: 2, time: 1_100, transition: 'ready', state: { residency: 'live', turn: { kind: 'idle' } } }],
+        },
+        {
+          sessionId: 'match',
+          parentSessionId: 'parent',
+          path: '/root/parent/needle-path',
+          mode: 'continuable',
+          label: 'Needle task',
+          state: { residency: 'live', turn: { kind: 'running' } },
+          modelSelection: { provider: 'deepseek', model: 'gpt-5.5' },
+          hasChildren: false,
+          declaredAt: 2_000,
+          declarationSeq: 2,
+          statePoints: [{ seq: 3, time: 2_100, transition: 'turn-started', state: { residency: 'live', turn: { kind: 'running' } } }],
+        },
+        {
+          sessionId: 'sibling',
+          parentSessionId: 'root',
+          path: '/root/sibling',
+          mode: 'continuable',
+          label: 'Sibling',
+          state: { residency: 'live', turn: { kind: 'running' } },
+          modelSelection: { provider: 'other', model: 'small' },
+          hasChildren: false,
+          declaredAt: 3_000,
+          declarationSeq: 3,
+          statePoints: [{ seq: 4, time: 3_100, transition: 'turn-started', state: { residency: 'live', turn: { kind: 'running' } } }],
+        },
+      ],
+    }]
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+    await act(async () => {})
+
+    const byLabel = (label: string) => container.querySelector(`[aria-label="${label}"]`) as HTMLInputElement | HTMLSelectElement
+    await act(async () => {
+      byLabel('状态筛选').value = 'running'
+      byLabel('状态筛选').dispatchEvent(new Event('change', { bubbles: true }))
+      byLabel('模型筛选').value = 'gpt-5.5'
+      byLabel('模型筛选').dispatchEvent(new Event('input', { bubbles: true }))
+      byLabel('路径筛选').value = 'needle-path'
+      byLabel('路径筛选').dispatchEvent(new Event('input', { bubbles: true }))
+      byLabel('文本筛选').value = 'Needle'
+      byLabel('文本筛选').dispatchEvent(new Event('input', { bubbles: true }))
+      ;(byLabel('仅长运行') as HTMLInputElement).checked = true
+      byLabel('仅长运行').dispatchEvent(new Event('change', { bubbles: true }))
+    })
+
+    expect(container.querySelector('[role="treegrid"]')?.textContent).toContain('parent')
+    expect(container.querySelector('[role="treegrid"]')?.textContent).toContain('Needle task')
+    expect(container.querySelector('[role="treegrid"]')?.textContent).not.toContain('Sibling')
+    unmount()
+  })
+
+  it('loads whitelisted details, renders task text as text, and clears details when the root changes', async () => {
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, render, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+    await act(async () => {})
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="查看详情 worker"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(fetchCalls).toEqual(['agents.timeline', 'agents.detail'])
+    expect(container.textContent).toContain('build <strong>needle</strong>')
+    expect(container.querySelector('strong')).toBeNull()
+    expect(container.textContent).toContain('subagent-next')
+    expect(container.textContent).toContain('workspace-write')
+    expect(container.textContent).not.toContain('credentialRef')
+    expect(container.textContent).not.toContain('operationId')
+
+    const nextList = baseSnapshot()
+    nextList.current = 'other'
+    nextList.byId = { other: { id: 'other', displayTitle: 'Other root', running: true } }
+    nextList.subagentsByParent = {}
+    list.set(nextList)
+    render(createElement(SubagentView, { sessionId: 'other', active: true, ctx: makeCtx(list), store }))
+
+    expect(container.textContent).not.toContain('build <strong>needle</strong>')
+    unmount()
+  })
+
+  it('shows task-unavailable detail state and lets the user retry failed detail reads', async () => {
+    detailQueue = [{
+      sessionId: 'child',
+      initialTask: { available: false, reason: 'not-accepted' },
+      backend: 'subagent-next',
+      forkTurns: 'none',
+      requestedModelSelection: { provider: 'deepseek', model: 'gpt-5.5' },
+      effectiveModelSelection: { provider: 'deepseek', model: 'gpt-5.5' },
+      allowedTools: [],
+      sandboxMode: null,
+      approvalPolicy: null,
+      filesystemPolicy: 'closed',
+    }]
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+    await act(async () => {})
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="查看详情 worker"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(container.textContent).toContain('任务不可用')
     unmount()
   })
 })

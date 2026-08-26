@@ -36,18 +36,30 @@ export interface TimelineDisplay {
   range: { start: number; end: number } | null
 }
 
+export interface TimelineDisplayFilters {
+  state?: string
+  model?: string
+  path?: string
+  text?: string
+  longRunningOnly?: boolean
+}
+
 export interface BuildTimelineDisplayOptions {
   timeline: AgentTimelineResult
   catalogs?: Readonly<Record<string, SidebarSubagentCatalog>>
   rootTitle?: string
   rootRunning?: boolean
   now: number
+  longRunningMinutes?: unknown
 }
 
 const DEFAULT_ROOT_TITLE = 'Root'
+const DEFAULT_LONG_RUNNING_MINUTES = 60
+const MAX_LONG_RUNNING_MINUTES = 10_080
 
 export function buildTimelineDisplay(options: BuildTimelineDisplayOptions): TimelineDisplay {
   const { timeline, catalogs = {}, now } = options
+  const longRunningMinutes = normalizeLongRunningMinutes(options.longRunningMinutes)
   const nativeRows = sortNativeRows(timeline.root.sessionId, timeline.agents)
   const depths = nativeDepths(timeline.root.sessionId, nativeRows)
   const displayRows: TimelineDisplayRow[] = [
@@ -56,7 +68,7 @@ export function buildTimelineDisplay(options: BuildTimelineDisplayOptions): Time
   const nativeIds = new Set(nativeRows.map(row => row.sessionId))
 
   for (const row of nativeRows) {
-    displayRows.push(agentDisplayRow(row, depths.get(row.sessionId) ?? 1, now))
+    displayRows.push(agentDisplayRow(row, depths.get(row.sessionId) ?? 1, now, longRunningMinutes))
   }
   appendCatalogDiagnostics(displayRows, {
     catalogs,
@@ -71,6 +83,35 @@ export function buildTimelineDisplay(options: BuildTimelineDisplayOptions): Time
     rows: displayRows,
     range: displayRange(displayRows, now),
   }
+}
+
+export function normalizeLongRunningMinutes(value: unknown): number {
+  if (value === undefined || value === null) return DEFAULT_LONG_RUNNING_MINUTES
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_LONG_RUNNING_MINUTES
+  const minutes = Math.round(value)
+  if (minutes < 0 || minutes > MAX_LONG_RUNNING_MINUTES) return DEFAULT_LONG_RUNNING_MINUTES
+  return minutes
+}
+
+export function filterTimelineDisplay(display: TimelineDisplay, filters: TimelineDisplayFilters): TimelineDisplay {
+  const normalized = normalizeFilters(filters)
+  if (normalized === null) return display
+
+  const keep = new Set<number>([0])
+  const ancestors: number[] = []
+  for (let index = 0; index < display.rows.length; index += 1) {
+    const row = display.rows[index]!
+    ancestors[row.depth] = index
+    ancestors.length = row.depth + 1
+    if (index === 0) continue
+    if (!rowMatchesFilters(row, normalized)) continue
+    for (let depth = 0; depth <= row.depth; depth += 1) {
+      const ancestorIndex = ancestors[depth]
+      if (ancestorIndex !== undefined) keep.add(ancestorIndex)
+    }
+  }
+
+  return { ...display, rows: display.rows.filter((_, index) => keep.has(index)) }
 }
 
 function rootDisplayRow(
@@ -103,7 +144,7 @@ function rootDisplayRow(
   }
 }
 
-function agentDisplayRow(row: AgentTimelineRow, depth: number, now: number): TimelineDisplayRow {
+function agentDisplayRow(row: AgentTimelineRow, depth: number, now: number, longRunningMinutes: number): TimelineDisplayRow {
   const segments = buildSegments(row)
   const endedAt = row.state.residency === 'closed'
     ? segments.findLast(segment => segment.state.residency === 'closed')?.start
@@ -122,7 +163,7 @@ function agentDisplayRow(row: AgentTimelineRow, depth: number, now: number): Tim
     activeDurationMs: durationOf(segments, now, 'active'),
     wallDurationMs: durationOf(segments, now, 'wall'),
     contextOnly: false,
-    longRunning: isLongRunning(row, segments, now),
+    longRunning: isLongRunning(row, segments, now, longRunningMinutes),
   }
 }
 
@@ -261,12 +302,18 @@ function durationOf(segments: readonly TimelineSegment[], now: number, mode: 'ac
   return total
 }
 
-function isLongRunning(row: AgentTimelineRow, segments: readonly TimelineSegment[], now: number): boolean {
+function isLongRunning(
+  row: AgentTimelineRow,
+  segments: readonly TimelineSegment[],
+  now: number,
+  longRunningMinutes: number,
+): boolean {
+  if (longRunningMinutes === 0) return false
   const last = segments.at(-1)
   if (last === undefined || last.end !== undefined || last.state.residency !== 'live') return false
   const kind = last.state.turn.kind
   if (kind !== 'provisioning' && kind !== 'running') return false
-  return now - last.start >= 60 * 60 * 1_000
+  return now - last.start >= longRunningMinutes * 60 * 1_000
 }
 
 function displayRange(rows: readonly TimelineDisplayRow[], now: number): TimelineDisplay['range'] {
@@ -342,4 +389,65 @@ function cloneState(state: AgentState): AgentState {
     case 'interrupted': return { residency: 'live', turn: { kind: 'interrupted' } }
     case 'errored': return { residency: 'live', turn: { kind: 'errored', code: state.turn.code } }
   }
+}
+
+interface NormalizedFilters {
+  state: string
+  model: string
+  path: string
+  text: string
+  longRunningOnly: boolean
+}
+
+function normalizeFilters(filters: TimelineDisplayFilters): NormalizedFilters | null {
+  const normalized = {
+    state: (filters.state ?? 'all').trim().toLowerCase(),
+    model: (filters.model ?? '').trim().toLowerCase(),
+    path: (filters.path ?? '').trim().toLowerCase(),
+    text: (filters.text ?? '').trim().toLowerCase(),
+    longRunningOnly: filters.longRunningOnly === true,
+  }
+  return normalized.state === 'all'
+    && normalized.model === ''
+    && normalized.path === ''
+    && normalized.text === ''
+    && !normalized.longRunningOnly
+    ? null
+    : normalized
+}
+
+function rowMatchesFilters(row: TimelineDisplayRow, filters: NormalizedFilters): boolean {
+  if (filters.state !== 'all' && stateFilterKey(row) !== filters.state) return false
+  if (filters.longRunningOnly && !row.longRunning) return false
+  if (filters.model !== '' && !modelText(row).includes(filters.model)) return false
+  if (filters.path !== '' && !(row.path ?? '').toLowerCase().includes(filters.path)) return false
+  if (filters.text !== '' && !searchText(row).includes(filters.text)) return false
+  return true
+}
+
+function stateFilterKey(row: TimelineDisplayRow): string {
+  if (row.state === undefined) return row.kind
+  if (row.state.residency !== 'live') return row.state.residency
+  return row.state.turn.kind
+}
+
+function modelText(row: TimelineDisplayRow): string {
+  return row.model === undefined
+    ? ''
+    : [
+        row.model.provider,
+        row.model.model,
+        row.model.reasoningEffort,
+        row.model.serviceTier,
+      ].filter(Boolean).join(' ').toLowerCase()
+}
+
+function searchText(row: TimelineDisplayRow): string {
+  return [
+    row.title,
+    row.path,
+    modelText(row),
+    row.state === undefined ? undefined : formatAgentState(row.state, 'zh'),
+    row.state === undefined ? undefined : formatAgentState(row.state, 'en'),
+  ].filter(Boolean).join(' ').toLowerCase()
 }

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildTimelineDisplay,
+  filterTimelineDisplay,
   formatAgentState,
+  normalizeLongRunningMinutes,
   type TimelineDisplayRow,
 } from '../src/client/agent-timeline.ts'
 import type { AgentState, AgentTimelineResult, AgentTimelineRow } from '../src/agent-timeline-routes.ts'
@@ -151,5 +153,75 @@ describe('agent timeline client projection', () => {
       'Errored',
       'Closed',
     ])
+  })
+
+  it('marks long-running live agents with a configurable minutes threshold', () => {
+    const result = timeline([
+      agent({
+        sessionId: 'slow',
+        parentSessionId: 'root',
+        path: '/root/slow',
+        declaredAt: 1_000,
+        declarationSeq: 1,
+        statePoints: [
+          { seq: 2, time: 2_000, transition: 'turn-started', state: state('running') },
+        ],
+      }),
+    ])
+
+    expect(normalizeLongRunningMinutes(undefined)).toBe(60)
+    expect(normalizeLongRunningMinutes('bad')).toBe(60)
+    expect(normalizeLongRunningMinutes(0)).toBe(0)
+    expect(normalizeLongRunningMinutes(10_081)).toBe(60)
+    expect(buildTimelineDisplay({ timeline: result, now: 62 * 60 * 1_000 }).rows.find(row => row.id === 'slow')?.longRunning).toBe(true)
+    expect(buildTimelineDisplay({ timeline: result, now: 62 * 60 * 1_000, longRunningMinutes: 0 }).rows.find(row => row.id === 'slow')?.longRunning).toBe(false)
+    expect(buildTimelineDisplay({ timeline: result, now: 31 * 60 * 1_000, longRunningMinutes: 30 }).rows.find(row => row.id === 'slow')?.longRunning).toBe(true)
+  })
+
+  it('filters by state, model, path, text, and long-running while retaining ancestors and spawn order', () => {
+    const result = timeline([
+      agent({
+        sessionId: 'parent',
+        parentSessionId: 'root',
+        path: '/root/parent',
+        label: 'Parent',
+        declaredAt: 1_000,
+        declarationSeq: 1,
+        state: state('idle'),
+        statePoints: [{ seq: 2, time: 1_100, transition: 'ready', state: state('idle') }],
+      }),
+      agent({
+        sessionId: 'match',
+        parentSessionId: 'parent',
+        path: '/root/parent/needle-path',
+        label: 'Needle task',
+        declaredAt: 2_000,
+        declarationSeq: 2,
+        statePoints: [{ seq: 3, time: 2_100, transition: 'turn-started', state: state('running') }],
+      }),
+      agent({
+        sessionId: 'sibling',
+        parentSessionId: 'root',
+        path: '/root/sibling',
+        label: 'Sibling',
+        declaredAt: 3_000,
+        declarationSeq: 3,
+        modelSelection: { provider: 'other', model: 'small' },
+        statePoints: [{ seq: 4, time: 3_100, transition: 'turn-started', state: state('running') }],
+      }),
+    ])
+    const display = buildTimelineDisplay({ timeline: result, now: 70 * 60 * 1_000 })
+
+    const filtered = filterTimelineDisplay(display, {
+      state: 'running',
+      model: 'gpt-5.5',
+      path: 'needle-path',
+      text: 'Needle',
+      longRunningOnly: true,
+    })
+
+    expect(ids(filtered.rows)).toEqual(['root', 'parent', 'match'])
+    expect(filtered.rows.find(row => row.id === 'parent')?.longRunning).toBe(false)
+    expect(filtered.rows.find(row => row.id === 'match')?.longRunning).toBe(true)
   })
 })

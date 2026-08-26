@@ -2,7 +2,7 @@
  * Run Dashboard page: a stable tree row list plus a shared horizontal Gantt
  * timeline for the current root agent and all recoverable descendants.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useSyncExternalStore } from 'react'
 import clsx from 'clsx'
 import {
@@ -16,7 +16,7 @@ import type {
   SidebarSubagentCatalog,
   SidebarJobView,
 } from '../context-types.ts'
-import type { AgentTimelineResult } from '../agent-timeline-routes.ts'
+import type { AgentDetailResult, AgentTimelineResult, AgentState, SpawnModelSelection } from '../agent-timeline-routes.ts'
 import {
   collectBranchIds,
   rootAncestor,
@@ -34,8 +34,11 @@ import { api, type JobOutputResult } from './api.ts'
 import { IconStopOutline16 } from './icons.tsx'
 import {
   buildTimelineDisplay,
+  filterTimelineDisplay,
   formatAgentState,
+  normalizeLongRunningMinutes,
   type TimelineDisplay,
+  type TimelineDisplayFilters,
   type TimelineSegment,
 } from './agent-timeline.ts'
 import {
@@ -321,6 +324,25 @@ type TimelineLoadState =
   | { kind: 'ready'; timeline: AgentTimelineResult }
   | { kind: 'error'; message: string }
 
+type AgentDetailLoadState =
+  | { kind: 'idle' }
+  | { kind: 'loading'; agentSessionId: string }
+  | { kind: 'ready'; agentSessionId: string; detail: AgentDetailResult }
+  | { kind: 'error'; agentSessionId: string; message: string }
+
+const STATE_FILTER_OPTIONS = [
+  'all',
+  'provisioning',
+  'running',
+  'waiting',
+  'idle',
+  'completed',
+  'interrupted',
+  'errored',
+  'cold',
+  'closed',
+] as const
+
 function isMobileDashboard(): boolean {
   return typeof window !== 'undefined' && window.innerWidth < RUN_DASHBOARD_MOBILE_WIDTH
 }
@@ -328,6 +350,39 @@ function isMobileDashboard(): boolean {
 function agentRowState(row: TimelineDisplay['rows'][number]): string {
   if (row.state === undefined) return row.kind === 'diagnostic' ? t('subagentDiagUnavailable') : t('subagentInactive')
   return formatAgentState(row.state, isZh() ? 'zh' : 'en')
+}
+
+function stateFilterLabel(value: string): string {
+  if (value === 'all') return t('runDashboardFilterAll')
+  if (value === 'cold') return formatAgentState({ residency: 'cold', lastTurn: 'idle' }, isZh() ? 'zh' : 'en')
+  if (value === 'closed') return formatAgentState({ residency: 'closed' }, isZh() ? 'zh' : 'en')
+  let state: AgentState
+  switch (value) {
+    case 'waiting':
+      state = { residency: 'live', turn: { kind: 'waiting', reason: 'mailbox', since: 0, deadline: 0 } }
+      break
+    case 'completed':
+      state = { residency: 'live', turn: { kind: 'completed' } }
+      break
+    case 'errored':
+      state = { residency: 'live', turn: { kind: 'errored', code: 'error' } }
+      break
+    case 'provisioning':
+      state = { residency: 'live', turn: { kind: 'provisioning' } }
+      break
+    case 'running':
+      state = { residency: 'live', turn: { kind: 'running' } }
+      break
+    case 'idle':
+      state = { residency: 'live', turn: { kind: 'idle' } }
+      break
+    case 'interrupted':
+      state = { residency: 'live', turn: { kind: 'interrupted' } }
+      break
+    default:
+      state = { residency: 'live', turn: { kind: 'idle' } }
+  }
+  return formatAgentState(state, isZh() ? 'zh' : 'en')
 }
 
 function formatTime(value: number | undefined): string {
@@ -367,6 +422,32 @@ function segmentStyle(
   return { left: `${left}%`, width: `${width}%` }
 }
 
+function modelLabel(model: SpawnModelSelection | undefined): string {
+  if (model === undefined) return '—'
+  return [
+    `${model.provider}/${model.model}`,
+    model.reasoningEffort,
+    model.serviceTier,
+  ].filter(Boolean).join(' · ')
+}
+
+function forkTurnsLabel(value: AgentDetailResult['forkTurns']): string {
+  return typeof value === 'number' ? String(value) : value
+}
+
+function detailProperties(detail: AgentDetailResult): Array<readonly [string, string]> {
+  return [
+    ['backend', detail.backend],
+    ['forkTurns', forkTurnsLabel(detail.forkTurns)],
+    ['requestedModel', modelLabel(detail.requestedModelSelection)],
+    ['effectiveModel', modelLabel(detail.effectiveModelSelection)],
+    ['tools', detail.allowedTools.length === 0 ? '—' : detail.allowedTools.join(', ')],
+    ['sandbox', detail.sandboxMode ?? '—'],
+    ['approval', detail.approvalPolicy ?? '—'],
+    ['filesystem', detail.filesystemPolicy],
+  ]
+}
+
 function catalogSignature(
   rootId: string | undefined,
   catalogs: Readonly<Record<string, SidebarSubagentCatalog>>,
@@ -396,8 +477,20 @@ function RunDashboardRows(props: {
   treeWidth: number
   maxTreeWidth: number
   setTreeWidth: (width: number) => void
+  selectedAgentId: string | undefined
+  onSelectAgent: (agentSessionId: string) => void
 }) {
-  const { display, now, zoom, scrollerRef, treeWidth, maxTreeWidth, setTreeWidth } = props
+  const {
+    display,
+    now,
+    zoom,
+    scrollerRef,
+    treeWidth,
+    maxTreeWidth,
+    setTreeWidth,
+    selectedAgentId,
+    onSelectAgent,
+  } = props
   const width = timelineWidth(zoom)
   const range = display.range
   const dragStartRef = useRef<{ x: number; width: number } | null>(null)
@@ -434,10 +527,23 @@ function RunDashboardRows(props: {
             className={clsx(css.runDashboardRow, row.kind === 'root' && css.runDashboardRootRow)}
             style={{ paddingLeft: 10 + row.depth * 16 }}
           >
-            <span className={css.runDashboardRowTitle}>{row.title}</span>
+            <span className={css.runDashboardRowHeader}>
+              <span className={css.runDashboardRowTitle}>{row.title}</span>
+              {row.longRunning && <span className={css.runDashboardWarn}>{t('runDashboardLongRunning')}</span>}
+              {row.kind === 'agent' && (
+                <button
+                  type="button"
+                  className={clsx(css.runDashboardDetailButton, selectedAgentId === row.id && css.runDashboardDetailButtonActive)}
+                  aria-label={`${t('runDashboardDetails')} ${row.title}`}
+                  onClick={() => { onSelectAgent(row.id) }}
+                >
+                  {t('runDashboardDetails')}
+                </button>
+              )}
+            </span>
             <span className={css.runDashboardStatus}>{agentRowState(row)}</span>
             {row.path !== undefined && <span className={css.runDashboardMeta}>{row.path}</span>}
-            {row.model !== undefined && <span className={css.runDashboardMeta}>{row.model.provider}/{row.model.model}</span>}
+            {row.model !== undefined && <span className={css.runDashboardMeta}>{modelLabel(row.model)}</span>}
             {row.kind === 'diagnostic'
               ? <span className={css.runDashboardMeta}>{t('runDashboardTimeUnavailable')}</span>
               : (
@@ -513,6 +619,7 @@ function RunDashboardMobile(props: { display: TimelineDisplay }) {
         <div key={row.id} className={css.runDashboardMobileRow}>
           <span className={css.runDashboardRowTitle}>{row.title}</span>
           <span className={css.runDashboardStatus}>{agentRowState(row)}</span>
+          {row.longRunning && <span className={css.runDashboardWarn}>{t('runDashboardLongRunning')}</span>}
           <span className={css.runDashboardMeta}>
             {row.kind === 'diagnostic' ? `${t('runDashboardTimeUnavailable')} · ` : `start ${formatTime(row.startedAt)} · `}
             active {formatDurationMs(row.activeDurationMs)} · {row.segments.length} segments
@@ -520,6 +627,106 @@ function RunDashboardMobile(props: { display: TimelineDisplay }) {
         </div>
       ))}
     </div>
+  )
+}
+
+function RunDashboardFilters(props: {
+  filters: TimelineDisplayFilters
+  onChange: (filters: TimelineDisplayFilters) => void
+}) {
+  const { filters, onChange } = props
+  const set = (patch: TimelineDisplayFilters): void => {
+    onChange({ ...filters, ...patch })
+  }
+  return (
+    <div className={css.runDashboardFilters}>
+      <select
+        aria-label={t('runDashboardFilterState')}
+        value={filters.state ?? 'all'}
+        onChange={(event) => { set({ state: event.currentTarget.value }) }}
+      >
+        {STATE_FILTER_OPTIONS.map(value => (
+          <option key={value} value={value}>{stateFilterLabel(value)}</option>
+        ))}
+      </select>
+      <input
+        aria-label={t('runDashboardFilterModel')}
+        value={filters.model ?? ''}
+        placeholder={t('runDashboardFilterModel')}
+        onInput={(event) => { set({ model: event.currentTarget.value }) }}
+        onChange={(event) => { set({ model: event.currentTarget.value }) }}
+      />
+      <input
+        aria-label={t('runDashboardFilterPath')}
+        value={filters.path ?? ''}
+        placeholder={t('runDashboardFilterPath')}
+        onInput={(event) => { set({ path: event.currentTarget.value }) }}
+        onChange={(event) => { set({ path: event.currentTarget.value }) }}
+      />
+      <input
+        aria-label={t('runDashboardFilterText')}
+        value={filters.text ?? ''}
+        placeholder={t('runDashboardFilterText')}
+        onInput={(event) => { set({ text: event.currentTarget.value }) }}
+        onChange={(event) => { set({ text: event.currentTarget.value }) }}
+      />
+      <label className={css.runDashboardCheck}>
+        <input
+          aria-label={t('runDashboardFilterLongRunning')}
+          type="checkbox"
+          checked={filters.longRunningOnly === true}
+          onChange={(event) => { set({ longRunningOnly: event.currentTarget.checked }) }}
+        />
+        <span>{t('runDashboardFilterLongRunning')}</span>
+      </label>
+    </div>
+  )
+}
+
+function AgentDetailPanel(props: {
+  state: AgentDetailLoadState
+  onRetry: (agentSessionId: string) => void
+  onClose: () => void
+}) {
+  const { state, onRetry, onClose } = props
+  if (state.kind === 'idle') return null
+  const agentSessionId = state.agentSessionId
+  return (
+    <section className={css.runDashboardDetail} aria-label={t('runDashboardDetailTitle')}>
+      <div className={css.runDashboardDetailHeader}>
+        <span>{t('runDashboardDetailTitle')}</span>
+        <button type="button" className={css.runDashboardDetailClose} aria-label={t('runDashboardCloseDetails')} onClick={onClose}>
+          <IconStopOutline16 size={10} />
+        </button>
+      </div>
+      {state.kind === 'loading' && <div className={css.runDashboardDetailHint}>{t('loading')}</div>}
+      {state.kind === 'error' && (
+        <div className={css.runDashboardDetailError}>
+          <span>{t('runDashboardDetailError')}: {state.message}</span>
+          <button type="button" onClick={() => { onRetry(agentSessionId) }}>{t('retry')}</button>
+        </div>
+      )}
+      {state.kind === 'ready' && (
+        <>
+          <div className={css.runDashboardDetailSection}>
+            <span className={css.runDashboardDetailLabel}>{t('runDashboardDetailTask')}</span>
+            {state.detail.initialTask.available
+              ? <pre className={css.runDashboardTask}>{state.detail.initialTask.text}</pre>
+              : <div className={css.runDashboardDetailHint}>{t('runDashboardDetailTaskUnavailable')}</div>}
+          </div>
+          <div className={css.runDashboardDetailSection}>
+            <span className={css.runDashboardDetailLabel}>{t('runDashboardDetailProperties')}</span>
+            <dl className={css.runDashboardProps}>
+              {detailProperties(state.detail).map(([label, value]) => (
+                <Fragment key={label}>
+                  <dt>{label}</dt><dd>{value}</dd>
+                </Fragment>
+              ))}
+            </dl>
+          </div>
+        </>
+      )}
+    </section>
   )
 }
 
@@ -538,12 +745,15 @@ export function SubagentView(props: {
   const { sessionId, active, ctx, store } = props
   const sessions = ctx.sessions
   const [loadState, setLoadState] = useState<TimelineLoadState>({ kind: 'idle' })
+  const [detailState, setDetailState] = useState<AgentDetailLoadState>({ kind: 'idle' })
+  const [filters, setFilters] = useState<TimelineDisplayFilters>({ state: 'all' })
   const [now, setNow] = useState(() => Date.now())
   const [zoom, setZoom] = useState(1)
   const [mobile] = useState(isMobileDashboard)
   const [localTreeWidth, setLocalTreeWidth] = useState(() => defaultRunDashboardTreeWidth(PANEL_DEFAULT))
   const appliedSeqRef = useRef<number | undefined>(undefined)
   const requestRef = useRef<AbortController | undefined>(undefined)
+  const detailRequestRef = useRef<AbortController | undefined>(undefined)
   const scrollerRef = useRef<HTMLDivElement>(null)
 
   const list = useSyncExternalStore(
@@ -567,11 +777,38 @@ export function SubagentView(props: {
   const maxTreeWidth = Math.max(RUN_DASHBOARD_TREE_MIN, Math.round(panelWidth) - RUN_DASHBOARD_TREE_MIN)
   const rawTreeWidth = storeSnapshot?.state?.runDashboardTreeWidth ?? localTreeWidth
   const treeWidth = clampRunDashboardTreeWidth(rawTreeWidth, panelWidth)
+  const longRunningMinutes = normalizeLongRunningMinutes(storeSnapshot?.prefs.pluginSettings.subagent?.longRunningMinutes)
 
   useEffect(() => {
     appliedSeqRef.current = undefined
+    detailRequestRef.current?.abort()
+    setDetailState({ kind: 'idle' })
     setLoadState(rootId === undefined ? { kind: 'idle' } : { kind: 'loading' })
   }, [rootId])
+
+  const loadAgentDetail = useCallback((agentSessionId: string): void => {
+    if (!active || rootId === undefined) return
+    detailRequestRef.current?.abort()
+    const controller = new AbortController()
+    detailRequestRef.current = controller
+    setDetailState({ kind: 'loading', agentSessionId })
+    void api.agentDetail(
+      { sessionId: rootId, cwd: rootSummary?.cwd },
+      agentSessionId,
+      controller.signal,
+    ).then((detail) => {
+      if (!controller.signal.aborted) setDetailState({ kind: 'ready', agentSessionId, detail })
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return
+      const message = error instanceof Error ? error.message : String(error)
+      setDetailState({ kind: 'error', agentSessionId, message })
+    })
+  }, [active, rootId, rootSummary?.cwd])
+
+  const closeAgentDetail = useCallback((): void => {
+    detailRequestRef.current?.abort()
+    setDetailState({ kind: 'idle' })
+  }, [])
 
   const setTreeWidth = useCallback((width: number): void => {
     if (storeSnapshot?.state !== undefined && store !== undefined) {
@@ -623,9 +860,14 @@ export function SubagentView(props: {
         rootTitle: rootSummary?.displayTitle,
         rootRunning: rootSummary?.running,
         now,
+        longRunningMinutes,
       })
       : undefined,
-    [loadState, catalogs, rootSummary?.displayTitle, rootSummary?.running, now],
+    [loadState, catalogs, rootSummary?.displayTitle, rootSummary?.running, now, longRunningMinutes],
+  )
+  const filteredDisplay = useMemo(
+    () => display === undefined ? undefined : filterTimelineDisplay(display, filters),
+    [display, filters],
   )
 
   const zoomBy = useCallback((factor: number): void => {
@@ -689,6 +931,7 @@ export function SubagentView(props: {
           <button type="button" aria-label={t('runDashboardNow')} onClick={scrollNow}>{t('runDashboardNow')}</button>
           <button type="button" aria-label={t('runDashboardPanRight')} onClick={panRight}>{t('runDashboardPanRight')}</button>
         </div>
+        <RunDashboardFilters filters={filters} onChange={setFilters} />
         {rootId === undefined && (
           <div className={css.subagentEmpty}>
             <div>{t('subagentEmpty')}</div>
@@ -705,25 +948,32 @@ export function SubagentView(props: {
             </button>
           </div>
         )}
-        {display !== undefined && display.rows.length === 1 && (
+        {filteredDisplay !== undefined && filteredDisplay.rows.length === 1 && (
           <div className={css.subagentEmpty}>
             <div>{t('subagentEmpty')}</div>
             <div className={css.subagentEmptyHint}>{t('subagentEmptyDesc')}</div>
           </div>
         )}
-        {display !== undefined && (mobile
-          ? <RunDashboardMobile display={display} />
+        {filteredDisplay !== undefined && (mobile
+          ? <RunDashboardMobile display={filteredDisplay} />
           : (
             <RunDashboardRows
-              display={display}
+              display={filteredDisplay}
               now={now}
               zoom={zoom}
               scrollerRef={scrollerRef}
               treeWidth={treeWidth}
               maxTreeWidth={maxTreeWidth}
               setTreeWidth={setTreeWidth}
+              selectedAgentId={detailState.kind === 'idle' ? undefined : detailState.agentSessionId}
+              onSelectAgent={loadAgentDetail}
             />
           ))}
+        <AgentDetailPanel
+          state={detailState}
+          onRetry={loadAgentDetail}
+          onClose={closeAgentDetail}
+        />
         <JobsSection
           byId={byId}
           jobsBySession={list.jobsBySession}

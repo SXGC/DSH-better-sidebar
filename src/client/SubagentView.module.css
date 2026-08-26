@@ -129,6 +129,40 @@
   color: var(--dsw-alias-label-primary);
 }
 
+.runDashboardFilters {
+  display: grid;
+  grid-template-columns: minmax(98px, 0.8fr) repeat(3, minmax(0, 1fr)) auto;
+  gap: 4px;
+  padding: 0 2px 6px;
+}
+
+.runDashboardFilters select,
+.runDashboardFilters input[type="text"],
+.runDashboardFilters input:not([type]) {
+  min-width: 0;
+  height: 24px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.runDashboardFilters input {
+  padding: 0 7px;
+}
+
+.runDashboardCheck {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  white-space: nowrap;
+}
+
 .runDashboardGrid {
   display: grid;
   grid-template-columns: auto 6px minmax(0, 1fr);
@@ -203,10 +237,45 @@
 }
 
 .runDashboardRowTitle {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font: var(--dsw-font-s-14);
+  color: var(--dsw-alias-label-primary);
+}
+
+.runDashboardRowHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.runDashboardWarn {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+  font: var(--dsw-font-xxxs-strong-11);
+}
+
+.runDashboardDetailButton {
+  flex: none;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+  cursor: pointer;
+}
+
+.runDashboardDetailButton:hover,
+.runDashboardDetailButtonActive {
+  background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
 }
 
@@ -276,6 +345,129 @@
   padding: 8px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
+}
+
+.runDashboardDetail {
+  margin-top: 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.runDashboardDetailHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+}
+
+.runDashboardDetailHeader span {
+  flex: 1;
+  min-width: 0;
+}
+
+.runDashboardDetailClose {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.runDashboardDetailClose:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.runDashboardDetailSection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.runDashboardDetailSection:last-child {
+  border-bottom: none;
+}
+
+.runDashboardDetailLabel {
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+}
+
+.runDashboardDetailHint,
+.runDashboardDetailError {
+  padding: 8px;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+}
+
+.runDashboardDetailError {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.runDashboardDetailError button {
+  flex: none;
+  height: 24px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+  cursor: pointer;
+}
+
+.runDashboardTask {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-subtle);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxs-12);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.runDashboardProps {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 0;
+  font: var(--dsw-font-xxxs-11);
+}
+
+.runDashboardProps dt {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.runDashboardProps dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .runDashboardFilters {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 /* ── Background-job section (below the topology tree) ────────────────── */

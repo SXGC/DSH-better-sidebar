@@ -155,6 +155,15 @@ export function builtinTabs(ctx: Context, options: BuiltinTabOptions = {}): read
           title: () => t('settingsJobsTitle'),
           desc: () => t('settingsJobsDesc'),
         }],
+        pluginToggles: [{
+          key: 'longRunningMinutes',
+          type: 'number',
+          title: () => t('settingsLongRunningMinutesTitle'),
+          desc: () => t('settingsLongRunningMinutesDesc'),
+          min: 0,
+          max: 10_080,
+          unit: 'min',
+        }],
       },
       component: ({ ctx, store, scope, visible, onSubagentJump }) => (
         <SubagentView
