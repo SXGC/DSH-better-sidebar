@@ -9,6 +9,7 @@ import {
   formatJobDuration,
   isJobLive,
   orderJobs,
+  resolveJobOwner,
   jobDotState,
   jobStatusLabel,
   treeSessionIds,
@@ -81,6 +82,35 @@ describe('collectTreeJobs', () => {
     const byId = { root: summary('root') }
     expect(collectTreeJobs(byId, undefined, 'root')).toEqual([])
     expect(collectTreeJobs(byId, {}, 'root')).toEqual([])
+  })
+})
+
+describe('resolveJobOwner', () => {
+  it('links a job owner only when that owner is present in the current display rows', () => {
+    const row = {
+      ownerSessionId: 'child',
+      ownerTitle: 'title-child',
+      job: job('bash-1'),
+    }
+
+    expect(resolveJobOwner(row, [
+      { id: 'root', title: 'Root row' },
+      { id: 'child', title: 'Worker row' },
+    ])).toEqual({
+      ownerSessionId: 'child',
+      ownerTitle: 'title-child',
+      displayTitle: 'Worker row',
+      linked: true,
+    })
+
+    expect(resolveJobOwner(row, [
+      { id: 'root', title: 'Root row' },
+    ])).toEqual({
+      ownerSessionId: 'child',
+      ownerTitle: 'title-child',
+      displayTitle: undefined,
+      linked: false,
+    })
   })
 })
 

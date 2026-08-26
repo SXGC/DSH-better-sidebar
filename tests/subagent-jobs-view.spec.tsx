@@ -11,6 +11,7 @@ import { createElement, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 import { SubagentView } from '../src/client/SubagentView.tsx'
+import type { AgentTimelineResult } from '../src/agent-timeline-routes.ts'
 import type { Context, SidebarSessionList } from '../src/context-types.ts'
 
 /** A subscribable sessions-list snapshot (mirror of the runtime list feed). */
@@ -67,9 +68,34 @@ function mount(node: ReactNode): { container: HTMLDivElement; unmount: () => voi
 
 const outputCalls: Array<{ sessionId: string; id: string }> = []
 const killCalls: Array<{ sessionId: string; id: string }> = []
+const scrollIntoViewTargets: Element[] = []
+let timelineQueue: AgentTimelineResult[]
 
 function jsonResponse(value: unknown): Response {
   return { ok: true, status: 200, json: async () => value } as unknown as Response
+}
+
+const baseTimeline: AgentTimelineResult = {
+  root: { sessionId: 'root', path: '/root', startedAt: 1_000, lastEventAt: 10_000 },
+  asOfSeq: 10,
+  agents: [
+    {
+      sessionId: 'child',
+      parentSessionId: 'root',
+      path: '/root/child',
+      mode: 'continuable',
+      label: 'worker',
+      state: { residency: 'live', turn: { kind: 'completed' } },
+      modelSelection: { provider: 'deepseek', model: 'gpt-5.5' },
+      hasChildren: false,
+      declaredAt: 2_000,
+      declarationSeq: 1,
+      statePoints: [
+        { seq: 3, time: 3_000, transition: 'turn-started', state: { residency: 'live', turn: { kind: 'running' } } },
+        { seq: 4, time: 6_000, transition: 'turn-settled', state: { residency: 'live', turn: { kind: 'completed' } } },
+      ],
+    },
+  ],
 }
 
 function baseSnapshot(): SidebarSessionList {
@@ -94,8 +120,16 @@ function baseSnapshot(): SidebarSessionList {
 beforeEach(() => {
   outputCalls.length = 0
   killCalls.length = 0
+  scrollIntoViewTargets.length = 0
+  timelineQueue = [baseTimeline]
+  HTMLElement.prototype.scrollIntoView = function scrollIntoView() {
+    scrollIntoViewTargets.push(this)
+  }
   vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
     const method = String(url).split('/').pop()
+    if (method === 'agents.timeline') {
+      return jsonResponse({ ok: true, value: timelineQueue.shift() ?? baseTimeline })
+    }
     const body = JSON.parse(String(init?.body)) as { sessionId: string; id: string }
     if (method === 'jobs.output') {
       outputCalls.push({ sessionId: body.sessionId, id: body.id })
@@ -139,6 +173,90 @@ describe('SubagentView background jobs', () => {
     expect(text).toContain('子代理')
     // Only the running row offers a kill button.
     expect(container.querySelectorAll('button[aria-label="终止"]')).toHaveLength(1)
+    unmount()
+  })
+
+  it('labels mixed job kinds and keeps unresolved owners visible as unlinked', async () => {
+    timelineQueue = [{ ...baseTimeline, agents: [] }]
+    const snapshot = baseSnapshot()
+    snapshot.jobsBySession = {
+      root: [
+        { id: 'bash-1', kind: 'bash', label: 'sleep 300', status: 'running', startedAt: 1_000 },
+      ],
+      child: [
+        { id: 'python-2', kind: 'python', label: 'train model', status: 'completed', startedAt: 2_000, finishedAt: 3_000 },
+      ],
+    }
+    const store = makeStore(snapshot)
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(store) }),
+    )
+    await act(async () => {})
+
+    expect(container.textContent).toContain('bash')
+    expect(container.textContent).toContain('python')
+    expect(container.textContent).toContain('train model')
+    expect(container.textContent).toContain('未关联')
+    expect(container.querySelector('button[aria-label="定位 owner 子代理"]')).toBeNull()
+    unmount()
+  })
+
+  it('locates a linked owner without closing the selected output dock', async () => {
+    const store = makeStore(baseSnapshot())
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(store) }),
+    )
+    await act(async () => {})
+
+    const row = container.querySelector('button[aria-label*="sleep 300"]') as HTMLButtonElement
+    await act(async () => { row.click() })
+    expect(container.textContent).toContain('output-of-bash-1')
+
+    const owner = container.querySelector('button[aria-label="定位 owner 主会话"]') as HTMLButtonElement
+    await act(async () => { owner.click() })
+
+    const rootRow = container.querySelector('[data-run-dashboard-row-id="root"]') as HTMLElement
+    const rootLane = container.querySelector('[data-run-dashboard-lane-id="root"]') as HTMLElement
+    expect(rootRow.dataset.ownerHighlighted).toBe('true')
+    expect(rootLane.dataset.ownerHighlighted).toBe('true')
+    expect(scrollIntoViewTargets.some(target => (target as HTMLElement).dataset.runDashboardRowId === 'root')).toBe(true)
+    expect(container.textContent).toContain('output-of-bash-1')
+    expect(row.getAttribute('aria-pressed')).toBe('true')
+    expect(container.querySelectorAll('[role="region"]')).toHaveLength(1)
+    unmount()
+  })
+
+  it('locates an owner hidden by filters and keeps the selected output dock', async () => {
+    const store = makeStore(baseSnapshot())
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(store) }),
+    )
+    await act(async () => {})
+
+    const jobRow = container.querySelector('button[aria-label*="echo hi"]') as HTMLButtonElement
+    await act(async () => { jobRow.click() })
+    expect(container.textContent).toContain('output-of-bash-2')
+
+    const pathFilter = container.querySelector('[aria-label="路径筛选"]') as HTMLInputElement
+    await act(async () => {
+      pathFilter.value = '/not-the-child'
+      pathFilter.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.querySelector('[data-run-dashboard-row-id="child"]')).toBeNull()
+
+    const owner = container.querySelector('button[aria-label="定位 owner 子代理"]') as HTMLButtonElement
+    expect(owner).not.toBeNull()
+    await act(async () => { owner.click() })
+    await act(async () => {})
+
+    const childRow = container.querySelector('[data-run-dashboard-row-id="child"]') as HTMLElement
+    const childLane = container.querySelector('[data-run-dashboard-lane-id="child"]') as HTMLElement
+    expect(pathFilter.value).toBe('')
+    expect(childRow.dataset.ownerHighlighted).toBe('true')
+    expect(childLane.dataset.ownerHighlighted).toBe('true')
+    expect(scrollIntoViewTargets.some(target => (target as HTMLElement).dataset.runDashboardRowId === 'child')).toBe(true)
+    expect(container.textContent).toContain('output-of-bash-2')
+    expect(jobRow.getAttribute('aria-pressed')).toBe('true')
     unmount()
   })
 
@@ -285,8 +403,8 @@ describe('SubagentView background jobs', () => {
       const row = container.querySelector('button[aria-label*="sleep 300"]') as HTMLButtonElement
       await act(async () => { row.click() })
       await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
-      // One peek for the initial load; the 2s poll never ran while inactive.
-      expect(outputCalls).toHaveLength(1)
+      // A hidden dashboard performs neither an initial read nor a 2s poll.
+      expect(outputCalls).toHaveLength(0)
       unmount()
     } finally {
       vi.useRealTimers()

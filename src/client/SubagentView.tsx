@@ -28,8 +28,10 @@ import {
   formatJobDuration,
   isJobLive,
   orderJobs,
+  resolveJobOwner,
   jobDotState,
   jobStatusLabel,
+  type JobOwnerDisplayRow,
   type TreeJob,
 } from './subagent-jobs.ts'
 import { api, type JobOutputResult } from './api.ts'
@@ -98,8 +100,9 @@ function JobOutputPane(props: {
   }, [ownerSessionId, job.id])
 
   useEffect(() => {
+    if (!active) return
     void load()
-    if (!active || !isJobLive(job)) return
+    if (!isJobLive(job)) return
     const timer = window.setInterval(() => { void load() }, JOB_POLL_MS)
     return () => { window.clearInterval(timer) }
   }, [load, active, job.status])
@@ -163,10 +166,13 @@ function JobsSection(props: {
   byId: SidebarSessionList['byId']
   jobsBySession: SidebarSessionList['jobsBySession']
   rootId: string | undefined
+  ownerRows: readonly JobOwnerDisplayRow[] | undefined
+  locatedOwnerId: string | undefined
+  onLocateOwner: (ownerSessionId: string) => void
   /** The page is visible (active tab + open panel): skip polling otherwise. */
   active: boolean
 }) {
-  const { byId, jobsBySession, rootId, active } = props
+  const { byId, jobsBySession, rootId, ownerRows, locatedOwnerId, onLocateOwner, active } = props
   const rows = useMemo(
     () => orderJobs(collectTreeJobs(byId, jobsBySession, rootId)),
     [byId, jobsBySession, rootId],
@@ -187,11 +193,6 @@ function JobsSection(props: {
     () => rows.reduce((count, row) => count + (isJobLive(row.job) ? 1 : 0), 0),
     [rows],
   )
-  const multiOwner = useMemo(
-    () => new Set(rows.map(row => row.ownerSessionId)).size > 1,
-    [rows],
-  )
-
   // The kill button stays armed only briefly; a stray click must never kill.
   useEffect(() => {
     if (armedId === undefined) return
@@ -200,11 +201,11 @@ function JobsSection(props: {
   }, [armedId])
 
   useEffect(() => {
-    if (liveCount === 0) return
+    if (!active || liveCount === 0) return
     setNow(Date.now())
     const timer = window.setInterval(() => { setNow(Date.now()) }, 1_000)
     return () => { window.clearInterval(timer) }
-  }, [liveCount])
+  }, [active, liveCount])
 
   // The docked output pane follows its job: when the selected job leaves
   // the mirror (settled and dropped, or the tree switched), close the dock.
@@ -249,11 +250,11 @@ function JobsSection(props: {
             const armed = armedId === job.id
             const killing = killingId === job.id
             const killFailed = killErrorId === job.id
+            const owner = resolveJobOwner(row, ownerRows)
             const elapsed = live
               ? now - job.startedAt
               : (job.finishedAt ?? job.startedAt) - job.startedAt
             const secondary = [
-              ...(multiOwner ? [row.ownerTitle] : []),
               jobStatusLabel(job.status, t),
               ...(job.detail !== undefined && job.detail !== '' ? [job.detail] : []),
               formatJobDuration(elapsed, t),
@@ -283,6 +284,27 @@ function JobsSection(props: {
                     <span className={css.jobsSecondary}>{secondary}</span>
                   </span>
                 </button>
+                {owner.linked ? (
+                  <button
+                    type="button"
+                    className={clsx(css.jobsOwner, locatedOwnerId === owner.ownerSessionId && css.jobsOwnerActive)}
+                    aria-label={t('jobOwnerLocate', { owner: owner.ownerTitle })}
+                    title={t('jobOwnerLocate', { owner: owner.ownerTitle })}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onLocateOwner(owner.ownerSessionId)
+                    }}
+                  >
+                    {owner.displayTitle ?? owner.ownerTitle}
+                  </button>
+                ) : (
+                  <span
+                    className={css.jobsOwnerUnlinked}
+                    title={`${owner.ownerTitle} · ${t('jobOwnerUnlinked')}`}
+                  >
+                    {owner.ownerTitle} · {t('jobOwnerUnlinked')}
+                  </span>
+                )}
                 {job.status === 'running' && (
                   <button
                     type="button"
@@ -544,6 +566,7 @@ function catalogSignature(
 function RunDashboardTreeRow(props: {
   row: TimelineDisplayRow
   selectedAgentId: string | undefined
+  locatedOwnerId: string | undefined
   armedCloseId: string | undefined
   controlState: AgentControlState
   onOpenAgent: (row: TimelineDisplayRow) => void
@@ -554,6 +577,7 @@ function RunDashboardTreeRow(props: {
   const {
     row,
     selectedAgentId,
+    locatedOwnerId,
     armedCloseId,
     controlState,
     onOpenAgent,
@@ -574,7 +598,10 @@ function RunDashboardTreeRow(props: {
         css.runDashboardRow,
         row.kind === 'root' && css.runDashboardRootRow,
         row.contextOnly && css.runDashboardContextRow,
+        locatedOwnerId === row.id && css.runDashboardOwnerLocated,
       )}
+      data-run-dashboard-row-id={row.id}
+      data-owner-highlighted={locatedOwnerId === row.id ? 'true' : undefined}
       style={{ paddingLeft: 10 + row.depth * 16 }}
     >
       <span className={css.runDashboardRowHeader}>
@@ -655,6 +682,7 @@ function RunDashboardRows(props: {
   maxTreeWidth: number
   setTreeWidth: (width: number) => void
   selectedAgentId: string | undefined
+  locatedOwnerId: string | undefined
   onSelectAgent: (agentSessionId: string) => void
   armedCloseId: string | undefined
   controlState: AgentControlState
@@ -671,6 +699,7 @@ function RunDashboardRows(props: {
     maxTreeWidth,
     setTreeWidth,
     selectedAgentId,
+    locatedOwnerId,
     onSelectAgent,
     armedCloseId,
     controlState,
@@ -711,6 +740,7 @@ function RunDashboardRows(props: {
             key={row.id}
             row={row}
             selectedAgentId={selectedAgentId}
+            locatedOwnerId={locatedOwnerId}
             armedCloseId={armedCloseId}
             controlState={controlState}
             onOpenAgent={onOpenAgent}
@@ -755,7 +785,12 @@ function RunDashboardRows(props: {
             <span>{range === null ? '—' : formatTime(range.end)}</span>
           </div>
           {display.rows.map(row => (
-            <div key={row.id} className={css.runDashboardLane}>
+            <div
+              key={row.id}
+              className={clsx(css.runDashboardLane, locatedOwnerId === row.id && css.runDashboardOwnerLocated)}
+              data-run-dashboard-lane-id={row.id}
+              data-owner-highlighted={locatedOwnerId === row.id ? 'true' : undefined}
+            >
               {range !== null && row.segments.map((segment, index) => (
                 <span
                   key={`${row.id}:${index}:${segment.start}`}
@@ -911,6 +946,7 @@ export function SubagentView(props: {
   const [detailState, setDetailState] = useState<AgentDetailLoadState>({ kind: 'idle' })
   const [controlState, setControlState] = useState<AgentControlState>({ kind: 'idle' })
   const [armedCloseId, setArmedCloseId] = useState<string | undefined>(undefined)
+  const [locatedOwnerId, setLocatedOwnerId] = useState<string | undefined>(undefined)
   const [filters, setFilters] = useState<TimelineDisplayFilters>({ state: 'all' })
   const [now, setNow] = useState(() => Date.now())
   const [zoom, setZoom] = useState(1)
@@ -920,6 +956,7 @@ export function SubagentView(props: {
   const requestRef = useRef<AbortController | undefined>(undefined)
   const detailRequestRef = useRef<AbortController | undefined>(undefined)
   const scrollerRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
 
   const list = useSyncExternalStore(
     useMemo(() => (callback: () => void) => sessions.list.subscribe(callback), [sessions]),
@@ -950,6 +987,7 @@ export function SubagentView(props: {
     setDetailState({ kind: 'idle' })
     setControlState({ kind: 'idle' })
     setArmedCloseId(undefined)
+    setLocatedOwnerId(undefined)
     setLoadState(rootId === undefined ? { kind: 'idle' } : { kind: 'loading' })
   }, [rootId])
 
@@ -1139,6 +1177,18 @@ export function SubagentView(props: {
     if (scroller !== null) scroller.scrollLeft = timelineWidth(zoom)
   }, [zoom])
 
+  const locateJobOwner = useCallback((ownerSessionId: string): void => {
+    setLocatedOwnerId(ownerSessionId)
+    setFilters({ state: 'all' })
+  }, [])
+
+  useEffect(() => {
+    if (locatedOwnerId === undefined) return
+    const target = [...(bodyRef.current?.querySelectorAll<HTMLElement>('[data-run-dashboard-row-id]') ?? [])]
+      .find(row => row.dataset.runDashboardRowId === locatedOwnerId)
+    target?.scrollIntoView({ block: 'center', inline: 'nearest' })
+  }, [locatedOwnerId, filters])
+
   const countLabel = display === undefined
     ? undefined
     : t('subagentCount', { count: Math.max(0, display.rows.length - 1) })
@@ -1164,7 +1214,7 @@ export function SubagentView(props: {
           <IconRefreshOutline14 />
         </button>
       </div>
-      <div className={css.subagentBody}>
+      <div className={css.subagentBody} ref={bodyRef}>
         <div className={css.runDashboardToolbar}>
           <button type="button" aria-label={t('runDashboardZoomIn')} onClick={zoomIn}>{t('runDashboardZoomIn')}</button>
           <button type="button" aria-label={t('runDashboardZoomOut')} onClick={zoomOut}>{t('runDashboardZoomOut')}</button>
@@ -1207,6 +1257,7 @@ export function SubagentView(props: {
               maxTreeWidth={maxTreeWidth}
               setTreeWidth={setTreeWidth}
               selectedAgentId={detailState.kind === 'idle' ? undefined : detailState.agentSessionId}
+              locatedOwnerId={locatedOwnerId}
               onSelectAgent={toggleAgentDetail}
               armedCloseId={armedCloseId}
               controlState={controlState}
@@ -1224,6 +1275,9 @@ export function SubagentView(props: {
           byId={byId}
           jobsBySession={list.jobsBySession}
           rootId={rootId}
+          ownerRows={display?.rows}
+          locatedOwnerId={locatedOwnerId}
+          onLocateOwner={locateJobOwner}
           active={active}
         />
       </div>

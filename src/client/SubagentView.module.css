@@ -236,6 +236,11 @@
   opacity: 0.68;
 }
 
+.runDashboardOwnerLocated {
+  box-shadow: inset 3px 0 0 var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-interactive-bg-active);
+}
+
 .runDashboardLane {
   position: relative;
 }
@@ -633,6 +638,39 @@
   white-space: nowrap;
   font: var(--dsw-font-xxxs-11);
   color: var(--dsw-alias-label-tertiary);
+}
+
+.jobsOwner,
+.jobsOwnerUnlinked {
+  flex: none;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 2px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font: var(--dsw-font-xxxs-strong-11);
+  line-height: 20px;
+}
+
+.jobsOwner {
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.jobsOwner:hover,
+.jobsOwner:focus-visible,
+.jobsOwnerActive {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.jobsOwnerUnlinked {
+  color: var(--dsw-alias-label-tertiary);
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .jobsKill {

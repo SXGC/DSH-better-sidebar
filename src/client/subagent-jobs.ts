@@ -21,6 +21,18 @@ export interface TreeJob {
   job: SidebarJobView
 }
 
+export interface JobOwnerResolution {
+  ownerSessionId: string
+  ownerTitle: string
+  displayTitle: string | undefined
+  linked: boolean
+}
+
+export interface JobOwnerDisplayRow {
+  id: string
+  title: string
+}
+
 /** Whether the registry still holds the job open (its duration ticks). */
 export function isJobLive(job: SidebarJobView): boolean {
   return job.status === 'running' || job.status === 'stopping'
@@ -93,6 +105,24 @@ export function collectTreeJobs(
     for (const job of jobs) rows.push({ ownerSessionId: sessionId, ownerTitle, job })
   }
   return rows
+}
+
+/**
+ * A job owner is clickable only when the owner session exists in the
+ * dashboard timeline. Filters may hide that row temporarily; locating the
+ * owner clears them. An unavailable timeline owner remains visibly unlinked.
+ */
+export function resolveJobOwner(
+  row: TreeJob,
+  displayRows: readonly JobOwnerDisplayRow[] | undefined,
+): JobOwnerResolution {
+  const displayRow = displayRows?.find(candidate => candidate.id === row.ownerSessionId)
+  return {
+    ownerSessionId: row.ownerSessionId,
+    ownerTitle: row.ownerTitle,
+    displayTitle: displayRow?.title,
+    linked: displayRow !== undefined,
+  }
 }
 
 /**
