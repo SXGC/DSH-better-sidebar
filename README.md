@@ -25,7 +25,7 @@
 - **🌐 内嵌浏览器**：多开网页 tab，后退 / 前进 / 刷新；内容运行在沙箱 iframe；外链默认按协议分流——HTTP 在侧边栏打开、HTTPS 走系统浏览器（设置页可分别调整）
 - **💻 真实终端**：xterm.js + node-pty 真实 shell，断线重连回放；可选为模型注入 `terminal_*` 工具
 - **🌿 Git 面板**：真 diff + VSCode 式 diff tab、历史、右键暂存 / 提交 / 还原
-- **🧩 后台任务页**：subagent 拓扑 + 后台任务（退出码 / 实时输出 / 强制终止）
+- **📈 运行看板**：当前根会话 + 全部原生子代理的树形甘特图，支持恢复后的多段状态、筛选、初始任务详情、聊天跳转、代理中断 / 关闭，以及独立后台任务列表
 - **🪟 双工作台**：右侧栏 + 底部面板；拖 Tab 拆分 / 合并分栏（可跨面板），移动端自动合并全宽抽屉
 - **🔁 会话隔离**：布局 / Tab / 面板按会话持久化，陈旧状态自动净化
 - **⚙️ 声明式设置**：设置页「侧边卡片」逐项独立开关，二级设置经齿轮弹窗
@@ -41,6 +41,16 @@
   <a href="https://github.com/user-attachments/assets/946f7028-4967-461e-a750-d1b5056b62d0"><img width="33%" alt="服务化基座截图" src="https://github.com/user-attachments/assets/946f7028-4967-461e-a750-d1b5056b62d0" /></a>
   <a href="https://github.com/user-attachments/assets/d4385b7e-aab4-425d-a5c4-2da5da81a34e"><img width="33%" alt="添加插件截图" src="https://github.com/user-attachments/assets/d4385b7e-aab4-425d-a5c4-2da5da81a34e" /></a>
 </div>
+
+### Unreleased：运行看板
+
+> ⚠️ **npm 正式交付基线阻塞**：运行看板依赖包含 DSH `5cf09d3a0a` 的公开会话 / 子代理接口。发布到 npm 前，所有 `@deepseek-ai/*` 依赖和 mount CI 必须切到包含该提交的首个正式发布版本；本变更不提供 `0.1.0-rc.8` 或 `0.1.1-rc.2` 兼容回退。
+
+**✨ 新功能**
+
+- 📈 **“任务管理”升级为“运行看板”**：内置 tab id 仍为 `subagent`，但页面显示当前根会话及全部原生子代理；桌面端为冻结左列 + 横向甘特图区，窄屏降级为树形列表，仍保留状态、path、模型、详情、聊天导航和有效代理控制。
+- 🔎 **代理检查与筛选**：支持按状态、模型、path、文本和长运行筛选；默认 60 分钟长运行阈值可在设置中调整或关闭。展开详情时才读取完整初始任务；该敏感内容不写入 localStorage、设置文档或日志。
+- 🧰 **代理控制和后台任务联动**：continuable 子代理可中断或两击确认关闭；页面不提供重启、重新运行代理或重新运行后台任务。后台任务列表继续展示 `bash` 等通用 `JobView`、owner、状态、时长、共享输出 Dock 和两击终止；点击 owner 会定位并高亮对应代理行。
 
 ### v0.14.0
 
@@ -216,7 +226,7 @@ v0.12.1 补齐基座能力（完整类型导出、能力探测、状态订阅、
 ## 🛠️ 开发与构建
 
 ```sh
-pnpm install      # @deepseek-ai/* 已发布到 npm（^0.1.0-rc.8），直接解析、无需令牌
+pnpm install      # 当前依赖可直接解析；运行看板正式发布前需统一切到包含 DSH 5cf09d3a0a 的正式版本
 pnpm typecheck    # tsc --noEmit
 pnpm build        # → lib/index.js + lib/invariant.js + lib/client.js + lib/client-registry.js + lib/types
 pnpm test         # vitest（含 manifest 一致性守卫，需先 build）
@@ -234,6 +244,7 @@ pnpm watch        # tsdown --watch
 ## ⚠️ 已知限制
 
 - Git 无 push/pull/fetch；无文件 watcher（手动刷新）；工具行内文件打开按钮不可拦截
+- 运行看板的 npm 正式发布等待 DSH 首个包含 `5cf09d3a0a` 的正式版本；不会回退支持 `0.1.0-rc.8` / `0.1.1-rc.2`
 - 终端 Tab 拖到另一分栏会重挂载（shell 重开）
 - Office 三件套预览（.docx/.xlsx/.pptx）已移至「推荐插件」（Office 预览插件，见设置页「添加插件」弹窗）；未安装时此类文件走代码/下载查看兜底
 - 浏览器沙箱无登录态/第三方 Cookie 受限，部分站点登录需走弹窗；被 `X-Frame-Options`/`frame-ancestors` 拒绝嵌入的站点（如 arxiv.org）显示原因面板（含「在浏览器中打开」）；iframe 内部跳转不进后退栈

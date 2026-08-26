@@ -13,7 +13,8 @@
 #   bash scripts/e2e-mount.sh [--grep <playwright-filter>]
 #
 # 环境变量（均可省略）：
-#   DSH_CMD        dsh 命令；缺省 PATH 上的 `dsh`，回退 npx 拉官方包
+#   DSH_CMD        dsh 命令；缺省 PATH 上的 `dsh`。必须是包含
+#                  5cf09d3a0a 的正式 DSH 版本；本脚本不回退 rc 包。
 #   TARBALL        插件 tarball；缺省仓库根 dsh-better-sidebar-*.tgz（须已 pack）
 #   PORT           固定端口（默认 0 = OS 分配，从日志解析 URL）
 #   DSH_HOME_BASE  覆盖 scratch 根目录（默认系统临时目录）。脚本始终在其下
@@ -31,6 +32,7 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DSH_CMD="${DSH_CMD:-dsh}"
 PORT="${PORT:-0}"
 TARBALL="${TARBALL:-}"
+REQUIRED_DSH_BASELINE="5cf09d3a0a"
 GREP_FILTER=""
 if [ "${1:-}" = "--grep" ]; then GREP_FILTER="${2:?--grep 需要参数}"; fi
 
@@ -41,15 +43,16 @@ die()  { printf '\033[31m[e2e-mount]\033[0m %s\n' "$*" >&2; exit 1; }
 command -v node >/dev/null 2>&1 || die "未找到 node（DSH 运行需要 Node.js >= 20）"
 command -v pnpm >/dev/null 2>&1 || die "未找到 pnpm（dsh plugin 转发给 pnpm）"
 
-# dsh CLI 解析：PATH 上的 dsh 优先，否则 npx 拉官方包（同 scripts/install.sh）
+# dsh CLI 解析：真实挂载验收必须显式使用调用方安装的正式 DSH。
 if ! command -v "$DSH_CMD" >/dev/null 2>&1; then
-  if command -v npx >/dev/null 2>&1; then
-    say "PATH 上无 $DSH_CMD，回退 npx -y --package @deepseek-ai/dsh"
-    DSH_CMD="npx -y --package @deepseek-ai/dsh dsh"
-  else
-    die "未找到 $DSH_CMD 或 npx；请先安装 DSH CLI（npm i -g @deepseek-ai/dsh）或用 DSH_CMD 指定"
-  fi
+  die "未找到 $DSH_CMD；请先安装包含 ${REQUIRED_DSH_BASELINE} 的正式 DSH CLI，或用 DSH_CMD 指定。不会回退到 rc 包。"
 fi
+
+DSH_VERSION="$($DSH_CMD --version 2>/dev/null || true)"
+if printf '%s\n' "$DSH_VERSION" | grep -Eq '0\.1\.0-rc\.8|0\.1\.1-rc\.2|-rc\.'; then
+  die "当前 DSH CLI 版本为预发布版本（${DSH_VERSION:-unknown}）。运行看板真实挂载验收要求包含 ${REQUIRED_DSH_BASELINE} 的首个正式 DSH 版本，不支持 rc.8/rc.2 回退。"
+fi
+say "dsh CLI: ${DSH_VERSION:-unknown}（需由调用方确认包含 ${REQUIRED_DSH_BASELINE}）"
 
 # tarball 解析
 if [ -z "$TARBALL" ]; then

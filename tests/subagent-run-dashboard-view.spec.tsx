@@ -6,7 +6,7 @@ import { act } from 'react-dom/test-utils'
 import { SubagentView } from '../src/client/SubagentView.tsx'
 import { createSidebarStore } from '../src/client/state.ts'
 import type { AgentDetailResult, AgentTimelineResult } from '../src/agent-timeline-routes.ts'
-import type { Context, SidebarSessionList } from '../src/context-types.ts'
+import type { Context, SidebarJobView, SidebarSessionList } from '../src/context-types.ts'
 
 function makeList(initial: SidebarSessionList) {
   let snapshot = initial
@@ -118,6 +118,7 @@ let fetchQueue: AgentTimelineResult[]
 let detailQueue: AgentDetailResult[]
 let detailFailures: number
 const fetchCalls: string[] = []
+const scrollIntoViewTargets: Element[] = []
 
 beforeEach(() => {
   fetchQueue = [baseTimeline]
@@ -136,6 +137,10 @@ beforeEach(() => {
   detailQueue = [detail, detail]
   detailFailures = 0
   fetchCalls.length = 0
+  scrollIntoViewTargets.length = 0
+  HTMLElement.prototype.scrollIntoView = function scrollIntoView() {
+    scrollIntoViewTargets.push(this)
+  }
   vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
     const method = String(url).split('/').pop() ?? ''
     fetchCalls.push(method)
@@ -309,12 +314,17 @@ describe('Run Dashboard view', () => {
     )
     await act(async () => {})
     const scroller = container.querySelector('[data-timeline-scroller]') as HTMLElement
+    scroller.scrollTo = function scrollTo(options?: ScrollToOptions | number) {
+      if (typeof options === 'number') this.scrollLeft = options
+      else if (options?.left !== undefined) this.scrollLeft = options.left
+    }
     const zoomIn = container.querySelector('button[aria-label="放大"]') as HTMLButtonElement
     const panRight = container.querySelector('button[aria-label="向右平移"]') as HTMLButtonElement
     const fit = container.querySelector('button[aria-label="适配全部"]') as HTMLButtonElement
     const now = container.querySelector('button[aria-label="回到现在"]') as HTMLButtonElement
 
     await act(async () => { zoomIn.click() })
+    await act(async () => {})
     const zoomedWidth = Number((container.querySelector('[data-timeline-canvas]') as HTMLElement).dataset.timelineWidth)
     scroller.scrollLeft = 40
     await act(async () => { list.set({ ...baseSnapshot(), byId: { ...baseSnapshot().byId, child: { ...baseSnapshot().byId.child!, running: true } } }) })
@@ -333,9 +343,139 @@ describe('Run Dashboard view', () => {
     unmount()
   })
 
-  it('renders the mobile fallback list without the shared gantt area', async () => {
+  it('renders the mobile fallback list with the same row actions but without the shared gantt area', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true })
-    const list = makeList(baseSnapshot())
+    const snapshot = baseSnapshot()
+    snapshot.jobsBySession = {
+      root: [
+        { id: 'bash-mobile', kind: 'bash', label: 'mobile job', status: 'running', startedAt: 1_000 },
+      ],
+    }
+    const list = makeList(snapshot)
+    const store = createSidebarStore()
+    store.setSession('root')
+    const openChild = vi.fn()
+    const interruptSubagent = vi.fn(async () => 'accepted' as const)
+    const { container, unmount } = mount(
+      createElement(SubagentView, {
+        sessionId: 'root',
+        active: true,
+        ctx: makeCtx(list, () => {}, { interruptSubagent } as Partial<Context['sessions']>),
+        store,
+        onOpenChild: openChild,
+      }),
+    )
+    await act(async () => {})
+
+    expect(container.querySelector('[data-mobile-run-dashboard]')).not.toBeNull()
+    expect(container.querySelector('[data-timeline-scroller]')).toBeNull()
+    expect(container.textContent).toContain('/root/child')
+    expect(container.textContent).toContain('active')
+    expect(container.textContent).toContain('后台任务')
+    expect(container.textContent).toContain('mobile job')
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="打开聊天 worker"]') as HTMLButtonElement).click()
+    })
+    expect(openChild).toHaveBeenCalledWith({
+      parentSessionId: 'root',
+      childSessionId: 'child',
+      mode: 'continuable',
+    })
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="查看详情 worker"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+    expect(fetchCalls).toEqual(['agents.timeline', 'agents.detail'])
+    expect(container.textContent).toContain('build <strong>needle</strong>')
+
+    const interrupt = container.querySelector('button[aria-label="中断 worker"]') as HTMLButtonElement
+    expect(interrupt.disabled).toBe(true)
+    unmount()
+  })
+
+  it('keeps filters, owner location, details, refresh, and viewport controls stable at 100 agents and 100 jobs over 24h', async () => {
+    const day = 24 * 60 * 60 * 1_000
+    const states = [
+      { residency: 'live', turn: { kind: 'provisioning' } },
+      { residency: 'live', turn: { kind: 'running' } },
+      { residency: 'live', turn: { kind: 'waiting', reason: 'mailbox', since: 0, deadline: 0 } },
+      { residency: 'live', turn: { kind: 'idle' } },
+      { residency: 'live', turn: { kind: 'completed' } },
+      { residency: 'live', turn: { kind: 'interrupted' } },
+      { residency: 'live', turn: { kind: 'errored', code: 'E_SCALE' } },
+      { residency: 'cold', lastTurn: 'idle' },
+      { residency: 'closed' },
+    ] satisfies AgentTimelineResult['agents'][number]['state'][]
+    const largeTimeline = (asOfSeq: number): AgentTimelineResult => ({
+      root: { sessionId: 'root', path: '/root', startedAt: 1_000, lastEventAt: 1_000 + day + 90_000 },
+      asOfSeq,
+      agents: Array.from({ length: 100 }, (_, index) => {
+        const declaredAt = 10_000 + index * 60_000
+        const state = states[index % states.length]!
+        return {
+          sessionId: `agent-${index}`,
+          parentSessionId: 'root',
+          path: `/root/agent-${index}`,
+          mode: 'continuable',
+          label: `Worker ${index}`,
+          state,
+          modelSelection: { provider: 'deepseek', model: index % 2 === 0 ? 'gpt-5.5' : 'gpt-5.5-mini' },
+          hasChildren: false,
+          declaredAt,
+          declarationSeq: index + 1,
+          statePoints: [
+            { seq: 200 + index * 3, time: declaredAt + 1_000, transition: 'turn-started', state: { residency: 'live', turn: { kind: 'running' } } },
+            { seq: 201 + index * 3, time: declaredAt + 2 * 60 * 60 * 1_000, transition: 'became-cold', state: { residency: 'cold', lastTurn: 'idle' } },
+            { seq: 202 + index * 3, time: declaredAt + 3 * 60 * 60 * 1_000, transition: 'ready', state },
+          ],
+        }
+      }),
+    })
+    const byId: SidebarSessionList['byId'] = { root: { id: 'root', displayTitle: 'Root task', running: false } }
+    for (let index = 0; index < 100; index += 1) {
+      byId[`agent-${index}`] = {
+        id: `agent-${index}`,
+        displayTitle: `Agent ${index}`,
+        origin: 'subagent',
+        parentId: 'root',
+        running: index % 3 === 0,
+      }
+    }
+    const jobsBySession: Record<string, SidebarJobView[]> = {
+      root: [{ id: 'job-root', kind: 'bash', label: 'scale job root', status: 'running', startedAt: 1_000 }],
+    }
+    for (let index = 0; index < 99; index += 1) {
+      jobsBySession[`agent-${index}`] = [{
+        id: `job-${index}`,
+        kind: index % 2 === 0 ? 'bash' : 'python',
+        label: `scale job ${index}`,
+        status: index % 2 === 0 ? 'running' : 'completed',
+        startedAt: 1_000 + index,
+        ...(index % 2 === 0 ? {} : { finishedAt: 2_000 + index }),
+      }]
+    }
+    fetchQueue = [largeTimeline(100), largeTimeline(101)]
+    const list = makeList({
+      current: 'root',
+      byId,
+      subagentsByParent: {
+        root: {
+          state: 'ready',
+          parentAvailable: true,
+          error: null,
+          entries: Array.from({ length: 100 }, (_, index) => ({
+            kind: 'child',
+            id: `agent-${index}`,
+            activity: index % 3 === 0 ? 'running' : 'inactive',
+            hasChildren: false,
+            mode: 'continuable',
+            label: `Worker ${index}`,
+          })),
+        },
+      },
+      jobsBySession,
+    })
     const store = createSidebarStore()
     store.setSession('root')
     const { container, unmount } = mount(
@@ -343,10 +483,58 @@ describe('Run Dashboard view', () => {
     )
     await act(async () => {})
 
-    expect(container.querySelector('[data-mobile-run-dashboard]')).not.toBeNull()
-    expect(container.querySelector('[data-timeline-scroller]')).toBeNull()
-    expect(container.textContent).toContain('segments')
-    expect(container.textContent).toContain('active')
+    expect(container.querySelectorAll('[data-run-dashboard-row-id]')).toHaveLength(101)
+    expect(container.querySelectorAll('button[aria-label*="scale job"]')).toHaveLength(100)
+    expect(container.textContent).toContain('100 个后台任务')
+    for (const label of ['创建中', '运行中', '等待中', '空闲', '已完成', '已中断', '出错', '已卸载', '已关闭']) {
+      expect(container.textContent).toContain(label)
+    }
+    expect(Number((container.querySelector('[data-timeline-canvas]') as HTMLElement).dataset.timelineRangeMs)).toBeGreaterThan(day)
+
+    const scroller = container.querySelector('[data-timeline-scroller]') as HTMLElement
+    scroller.scrollTo = function scrollTo(options?: ScrollToOptions | number) {
+      if (typeof options === 'number') this.scrollLeft = options
+      else if (options?.left !== undefined) this.scrollLeft = options.left
+    }
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="放大"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+    scroller.scrollLeft = 77
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="刷新"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+    expect(scroller.scrollLeft).toBe(77)
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="向右平移"]') as HTMLButtonElement).click()
+    })
+    expect(scroller.scrollLeft).toBeGreaterThan(77)
+
+    const pathFilter = container.querySelector('[aria-label="路径筛选"]') as HTMLInputElement
+    await act(async () => {
+      pathFilter.value = '/root/agent-99'
+      pathFilter.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.querySelector('[data-run-dashboard-row-id="root"]')).not.toBeNull()
+    expect(container.querySelector('[data-run-dashboard-row-id="agent-99"]')).not.toBeNull()
+    expect(container.querySelector('[data-run-dashboard-row-id="agent-1"]')).toBeNull()
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="定位 owner Agent 98"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+    expect(pathFilter.value).toBe('')
+    expect((container.querySelector('[data-run-dashboard-row-id="agent-98"]') as HTMLElement).dataset.ownerHighlighted).toBe('true')
+    expect((container.querySelector('[data-run-dashboard-lane-id="agent-98"]') as HTMLElement).dataset.ownerHighlighted).toBe('true')
+    expect(scrollIntoViewTargets.some(target => (target as HTMLElement).dataset.runDashboardRowId === 'agent-98')).toBe(true)
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="查看详情 Worker 99"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+    expect(fetchCalls).toContain('agents.detail')
+    expect(container.textContent).toContain('build <strong>needle</strong>')
     unmount()
   })
 

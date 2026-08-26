@@ -25,7 +25,7 @@
 - **🌐 Embedded Browser**: multiple web tabs with back / forward / refresh; content runs in a sandboxed iframe; external links are routed by protocol by default — HTTP opens in the sidebar, HTTPS goes to the system browser (both adjustable in settings)
 - **💻 Real Terminal**: xterm.js + node-pty real shell, reconnect with transcript replay; optionally injects `terminal_*` tools for the model
 - **🌿 Git Panel**: real diff + VSCode-style diff tabs, history, right-click to stage / commit / revert
-- **🧩 Background Tasks**: agent topology + background tasks (exit codes / live output / force-kill)
+- **📈 Run Dashboard**: a tree Gantt for the current root session and all native subagents, with restored multi-segment state, filters, initial-task details, chat navigation, agent interrupt / close controls, and a separate background-jobs list
 - **🪟 Dual Workbench**: right sidebar + bottom panel; drag tabs to split / merge panes (cross-panel), mobile auto-merges into a full-width drawer
 - **🔁 Session Isolation**: layout / tabs / panels persisted per session, stale state auto-purged
 - **⚙️ Declarative Settings**: per-item toggles in the "Side Cards" settings section, secondary settings via the gear dialog
@@ -40,6 +40,16 @@
   <a href="https://github.com/user-attachments/assets/946f7028-4967-461e-a750-d1b5056b62d0"><img width="45%" alt="Service API base screenshot" src="https://github.com/user-attachments/assets/946f7028-4967-461e-a750-d1b5056b62d0" /></a>
   <a href="https://github.com/user-attachments/assets/d4385b7e-aab4-425d-a5c4-2da5da81a34e"><img width="45%" alt="Add Plugins screenshot" src="https://github.com/user-attachments/assets/d4385b7e-aab4-425d-a5c4-2da5da81a34e" /></a>
 </div>
+
+### Unreleased: Run Dashboard
+
+> ⚠️ **Formal npm delivery is blocked on the DSH baseline**: the Run Dashboard depends on public session / subagent APIs that include DSH `5cf09d3a0a`. Before npm release, every `@deepseek-ai/*` dependency and the mount CI lane must move to the first formal DSH release that contains that commit; this change does not add a `0.1.0-rc.8` or `0.1.1-rc.2` fallback.
+
+**✨ New features**
+
+- 📈 **"Background Tasks" becomes "Run Dashboard"**: the built-in tab id stays `subagent`, but the page now shows the current root session and every native subagent. Desktop uses a frozen left column plus a horizontal Gantt timeline; narrow screens degrade to a tree list while keeping status, path, model, details, chat navigation, and valid agent controls.
+- 🔎 **Agent inspection and filters**: filter by state, model, path, text, and long-running agents. The default long-running threshold is 60 minutes and can be changed or disabled in settings. Full initial tasks are read only after the user opens details; this sensitive text is not stored in localStorage, settings documents, or logs.
+- 🧰 **Agent controls and job linkage**: continuable subagents can be interrupted or closed with two-click confirmation. The page does not offer restart or rerun for agents or jobs. The background-jobs list keeps generic `JobView` rows such as `bash`, owner, status, duration, the shared output dock, and two-click kill; clicking an owner locates and highlights the matching agent row.
 
 ### v0.14.0
 
@@ -247,7 +257,7 @@ The dashed cards at the end of the "Sidebar content" / "File viewers" grids in t
 ## 🛠️ Development & Build
 
 ```sh
-pnpm install      # @deepseek-ai/* resolved from npm (^0.1.0-rc.8, published) — no token needed
+pnpm install      # current deps resolve from npm; Run Dashboard release must move to a formal DSH build containing 5cf09d3a0a
 pnpm typecheck    # tsc --noEmit
 pnpm build        # → lib/index.js + lib/invariant.js + lib/client.js + lib/client-registry.js + lib/types
 pnpm test         # vitest (includes manifest consistency guard; build first)
@@ -265,6 +275,7 @@ pnpm watch        # tsdown --watch
 ## ⚠️ Known Limitations
 
 - Git has no push/pull/fetch; no file watcher (manual refresh); tool inline file-open buttons cannot be intercepted
+- Run Dashboard npm release waits for the first formal DSH version that contains `5cf09d3a0a`; it will not fall back to `0.1.0-rc.8` / `0.1.1-rc.2`
 - Dragging a terminal tab to another pane remounts it (shell restarts)
 - Office-suite preview (.docx/.xlsx/.pptx) moved to the recommended office plugin (see the "Add plugins" modals in settings); without it these files fall through to the code/download fallbacks
 - Browser sandbox has no login state / third-party cookies are restricted; some sites need popup login; sites that refuse embedding via `X-Frame-Options`/`frame-ancestors` (e.g. arxiv.org) show a reason panel (with "Open in browser"); in-iframe navigation does not enter the back stack

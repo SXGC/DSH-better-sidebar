@@ -778,6 +778,7 @@ function RunDashboardRows(props: {
           className={css.runDashboardCanvas}
           data-timeline-canvas
           data-timeline-width={width}
+          data-timeline-range-ms={range === null ? undefined : range.end - range.start}
           style={{ width }}
         >
           <div className={css.runDashboardScale}>
@@ -810,19 +811,32 @@ function RunDashboardRows(props: {
   )
 }
 
-function RunDashboardMobile(props: { display: TimelineDisplay }) {
+function RunDashboardMobile(props: {
+  display: TimelineDisplay
+  selectedAgentId: string | undefined
+  locatedOwnerId: string | undefined
+  onSelectAgent: (agentSessionId: string) => void
+  armedCloseId: string | undefined
+  controlState: AgentControlState
+  onOpenAgent: (row: TimelineDisplayRow) => void
+  onInterruptAgent: (row: TimelineDisplayRow) => void
+  onCloseAgent: (row: TimelineDisplayRow) => void
+}) {
   return (
-    <div data-mobile-run-dashboard className={css.runDashboardMobile}>
+    <div data-mobile-run-dashboard className={css.runDashboardMobile} role="treegrid" aria-label={t('subagent')}>
       {props.display.rows.map(row => (
-        <div key={row.id} className={css.runDashboardMobileRow}>
-          <span className={css.runDashboardRowTitle}>{row.title}</span>
-          <span className={css.runDashboardStatus}>{agentRowState(row)}</span>
-          {row.longRunning && <span className={css.runDashboardWarn}>{t('runDashboardLongRunning')}</span>}
-          <span className={css.runDashboardMeta}>
-            {row.kind === 'diagnostic' ? `${t('runDashboardTimeUnavailable')} · ` : `start ${formatTime(row.startedAt)} · `}
-            active {formatDurationMs(row.activeDurationMs)} · {row.segments.length} segments
-          </span>
-        </div>
+        <RunDashboardTreeRow
+          key={row.id}
+          row={row}
+          selectedAgentId={props.selectedAgentId}
+          locatedOwnerId={props.locatedOwnerId}
+          armedCloseId={props.armedCloseId}
+          controlState={props.controlState}
+          onOpenAgent={props.onOpenAgent}
+          onSelectAgent={props.onSelectAgent}
+          onInterruptAgent={props.onInterruptAgent}
+          onCloseAgent={props.onCloseAgent}
+        />
       ))}
     </div>
   )
@@ -955,6 +969,7 @@ export function SubagentView(props: {
   const appliedSeqRef = useRef<number | undefined>(undefined)
   const requestRef = useRef<AbortController | undefined>(undefined)
   const detailRequestRef = useRef<AbortController | undefined>(undefined)
+  const zoomFrameRef = useRef<number | undefined>(undefined)
   const scrollerRef = useRef<HTMLDivElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
 
@@ -1022,6 +1037,9 @@ export function SubagentView(props: {
   }, [])
 
   useEffect(() => () => { detailRequestRef.current?.abort() }, [])
+  useEffect(() => () => {
+    if (zoomFrameRef.current !== undefined) window.cancelAnimationFrame(zoomFrameRef.current)
+  }, [])
 
   const toggleAgentDetail = useCallback((agentSessionId: string): void => {
     if (detailState.kind !== 'idle' && detailState.agentSessionId === agentSessionId) {
@@ -1157,7 +1175,9 @@ export function SubagentView(props: {
     const nextZoom = Math.min(8, Math.max(0.25, zoom * factor))
     setZoom(nextZoom)
     if (scroller !== null) {
-      window.requestAnimationFrame(() => {
+      if (zoomFrameRef.current !== undefined) window.cancelAnimationFrame(zoomFrameRef.current)
+      zoomFrameRef.current = window.requestAnimationFrame(() => {
+        zoomFrameRef.current = undefined
         scroller.scrollLeft = Math.max(0, ratio * timelineWidth(nextZoom) - anchor)
       })
     }
@@ -1165,14 +1185,20 @@ export function SubagentView(props: {
   const zoomIn = useCallback((): void => { zoomBy(TIMELINE_ZOOM_FACTOR) }, [zoomBy])
   const zoomOut = useCallback((): void => { zoomBy(1 / TIMELINE_ZOOM_FACTOR) }, [zoomBy])
   const fitAll = useCallback((): void => {
+    if (zoomFrameRef.current !== undefined) window.cancelAnimationFrame(zoomFrameRef.current)
+    zoomFrameRef.current = undefined
     setZoom(1)
     scrollerRef.current?.scrollTo({ left: 0 })
   }, [])
   const panRight = useCallback((): void => {
+    if (zoomFrameRef.current !== undefined) window.cancelAnimationFrame(zoomFrameRef.current)
+    zoomFrameRef.current = undefined
     const scroller = scrollerRef.current
     if (scroller !== null) scroller.scrollLeft += TIMELINE_PAN_STEP
   }, [])
   const scrollNow = useCallback((): void => {
+    if (zoomFrameRef.current !== undefined) window.cancelAnimationFrame(zoomFrameRef.current)
+    zoomFrameRef.current = undefined
     const scroller = scrollerRef.current
     if (scroller !== null) scroller.scrollLeft = timelineWidth(zoom)
   }, [zoom])
@@ -1215,13 +1241,15 @@ export function SubagentView(props: {
         </button>
       </div>
       <div className={css.subagentBody} ref={bodyRef}>
-        <div className={css.runDashboardToolbar}>
-          <button type="button" aria-label={t('runDashboardZoomIn')} onClick={zoomIn}>{t('runDashboardZoomIn')}</button>
-          <button type="button" aria-label={t('runDashboardZoomOut')} onClick={zoomOut}>{t('runDashboardZoomOut')}</button>
-          <button type="button" aria-label={t('runDashboardFitAll')} onClick={fitAll}>{t('runDashboardFitAll')}</button>
-          <button type="button" aria-label={t('runDashboardNow')} onClick={scrollNow}>{t('runDashboardNow')}</button>
-          <button type="button" aria-label={t('runDashboardPanRight')} onClick={panRight}>{t('runDashboardPanRight')}</button>
-        </div>
+        {!mobile && (
+          <div className={css.runDashboardToolbar}>
+            <button type="button" aria-label={t('runDashboardZoomIn')} onClick={zoomIn}>{t('runDashboardZoomIn')}</button>
+            <button type="button" aria-label={t('runDashboardZoomOut')} onClick={zoomOut}>{t('runDashboardZoomOut')}</button>
+            <button type="button" aria-label={t('runDashboardFitAll')} onClick={fitAll}>{t('runDashboardFitAll')}</button>
+            <button type="button" aria-label={t('runDashboardNow')} onClick={scrollNow}>{t('runDashboardNow')}</button>
+            <button type="button" aria-label={t('runDashboardPanRight')} onClick={panRight}>{t('runDashboardPanRight')}</button>
+          </div>
+        )}
         <RunDashboardFilters filters={filters} onChange={setFilters} />
         {rootId === undefined && (
           <div className={css.subagentEmpty}>
@@ -1246,7 +1274,19 @@ export function SubagentView(props: {
           </div>
         )}
         {filteredDisplay !== undefined && (mobile
-          ? <RunDashboardMobile display={filteredDisplay} />
+          ? (
+            <RunDashboardMobile
+              display={filteredDisplay}
+              selectedAgentId={detailState.kind === 'idle' ? undefined : detailState.agentSessionId}
+              locatedOwnerId={locatedOwnerId}
+              onSelectAgent={toggleAgentDetail}
+              armedCloseId={armedCloseId}
+              controlState={controlState}
+              onOpenAgent={openAgent}
+              onInterruptAgent={interruptAgent}
+              onCloseAgent={closeAgent}
+            />
+          )
           : (
             <RunDashboardRows
               display={filteredDisplay}
