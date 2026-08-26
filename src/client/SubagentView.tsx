@@ -10,9 +10,11 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   Context,
+  SidebarContinuableSubagentAddress,
   SidebarSessionList,
   SidebarSessionSummary,
   SidebarSubagentAddress,
+  SidebarSubagentControlOutcome,
   SidebarSubagentCatalog,
   SidebarJobView,
 } from '../context-types.ts'
@@ -39,6 +41,7 @@ import {
   normalizeLongRunningMinutes,
   type TimelineDisplay,
   type TimelineDisplayFilters,
+  type TimelineDisplayRow,
   type TimelineSegment,
 } from './agent-timeline.ts'
 import {
@@ -55,6 +58,8 @@ import css from './SubagentView.module.css'
 const JOB_POLL_MS = 2000
 /** How long the kill button stays armed before it needs re-confirming. */
 const JOB_KILL_ARM_MS = 3000
+/** How long the agent close button stays armed before it needs re-confirming. */
+const AGENT_CLOSE_ARM_MS = 3000
 
 /**
  * The shared output dock of the jobs section: ONE pane at the bottom of the
@@ -330,6 +335,14 @@ type AgentDetailLoadState =
   | { kind: 'ready'; agentSessionId: string; detail: AgentDetailResult }
   | { kind: 'error'; agentSessionId: string; message: string }
 
+type AgentControlAction = 'interrupt' | 'close'
+
+type AgentControlState =
+  | { kind: 'idle' }
+  | { kind: 'loading'; agentSessionId: string; action: AgentControlAction }
+  | { kind: 'done'; agentSessionId: string; action: AgentControlAction; outcome: SidebarSubagentControlOutcome }
+  | { kind: 'error'; agentSessionId: string; action: AgentControlAction; outcome: SidebarSubagentControlOutcome }
+
 const STATE_FILTER_OPTIONS = [
   'all',
   'provisioning',
@@ -435,6 +448,32 @@ function forkTurnsLabel(value: AgentDetailResult['forkTurns']): string {
   return typeof value === 'number' ? String(value) : value
 }
 
+function operationId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `run-dashboard-close-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+function agentAddress(row: TimelineDisplayRow): SidebarSubagentAddress | undefined {
+  return row.kind === 'agent' && row.parentSessionId !== undefined && row.mode !== undefined
+    ? { parentSessionId: row.parentSessionId, childSessionId: row.id, mode: row.mode }
+    : undefined
+}
+
+function continuableAgentAddress(row: TimelineDisplayRow): SidebarContinuableSubagentAddress | undefined {
+  const address = agentAddress(row)
+  return address?.mode === 'continuable' ? address as SidebarContinuableSubagentAddress : undefined
+}
+
+function canInterruptAgent(row: TimelineDisplayRow): boolean {
+  if (continuableAgentAddress(row) === undefined || row.state?.residency !== 'live') return false
+  return row.state.turn.kind === 'running' || row.state.turn.kind === 'waiting'
+}
+
+function canCloseAgent(row: TimelineDisplayRow): boolean {
+  return continuableAgentAddress(row) !== undefined && row.state?.residency !== 'closed'
+}
+
 function detailProperties(detail: AgentDetailResult): Array<readonly [string, string]> {
   return [
     ['backend', detail.backend],
@@ -469,6 +508,105 @@ function catalogSignature(
   return rows.join('\n')
 }
 
+function RunDashboardTreeRow(props: {
+  row: TimelineDisplayRow
+  selectedAgentId: string | undefined
+  armedCloseId: string | undefined
+  controlState: AgentControlState
+  onOpenAgent: (row: TimelineDisplayRow) => void
+  onSelectAgent: (agentSessionId: string) => void
+  onInterruptAgent: (row: TimelineDisplayRow) => void
+  onCloseAgent: (row: TimelineDisplayRow) => void
+}) {
+  const {
+    row,
+    selectedAgentId,
+    armedCloseId,
+    controlState,
+    onOpenAgent,
+    onSelectAgent,
+    onInterruptAgent,
+    onCloseAgent,
+  } = props
+  const rowControl = controlState.kind !== 'idle' && controlState.agentSessionId === row.id
+    ? controlState
+    : undefined
+  const closeArmed = armedCloseId === row.id
+
+  return (
+    <div
+      role="row"
+      aria-level={row.depth + 1}
+      className={clsx(css.runDashboardRow, row.kind === 'root' && css.runDashboardRootRow)}
+      style={{ paddingLeft: 10 + row.depth * 16 }}
+    >
+      <span className={css.runDashboardRowHeader}>
+        <span className={css.runDashboardRowTitle}>{row.title}</span>
+        {row.longRunning && <span className={css.runDashboardWarn}>{t('runDashboardLongRunning')}</span>}
+        {row.kind === 'agent' && (
+          <>
+            <button
+              type="button"
+              className={css.runDashboardDetailButton}
+              aria-label={`${t('runDashboardOpenChat')} ${row.title}`}
+              onClick={() => { onOpenAgent(row) }}
+            >
+              {t('runDashboardOpenChat')}
+            </button>
+            <button
+              type="button"
+              className={clsx(css.runDashboardDetailButton, selectedAgentId === row.id && css.runDashboardDetailButtonActive)}
+              aria-label={`${t('runDashboardDetails')} ${row.title}`}
+              onClick={() => { onSelectAgent(row.id) }}
+            >
+              {t('runDashboardDetails')}
+            </button>
+            <button
+              type="button"
+              className={css.runDashboardDetailButton}
+              aria-label={`${t('runDashboardInterrupt')} ${row.title}`}
+              disabled={!canInterruptAgent(row) || rowControl?.kind === 'loading'}
+              onClick={() => { onInterruptAgent(row) }}
+            >
+              {t('runDashboardInterrupt')}
+            </button>
+            <button
+              type="button"
+              className={clsx(css.runDashboardDetailButton, closeArmed && css.runDashboardDangerButton)}
+              aria-label={`${closeArmed ? t('runDashboardConfirmClose') : t('runDashboardCloseAgent')} ${row.title}`}
+              disabled={!canCloseAgent(row) || rowControl?.kind === 'loading'}
+              onClick={() => { onCloseAgent(row) }}
+            >
+              {closeArmed ? t('runDashboardConfirmClose') : t('runDashboardCloseAgent')}
+            </button>
+          </>
+        )}
+      </span>
+      {rowControl !== undefined && (
+        <span className={clsx(
+          css.runDashboardControlResult,
+          rowControl.kind === 'error' && css.runDashboardControlError,
+        )}>
+          {rowControl.kind === 'loading' ? t('loading') : rowControl.outcome}
+        </span>
+      )}
+      <span className={css.runDashboardStatus}>{agentRowState(row)}</span>
+      {row.path !== undefined && <span className={css.runDashboardMeta}>{row.path}</span>}
+      {row.model !== undefined && <span className={css.runDashboardMeta}>{modelLabel(row.model)}</span>}
+      {row.kind === 'diagnostic'
+        ? <span className={css.runDashboardMeta}>{t('runDashboardTimeUnavailable')}</span>
+        : (
+          <span className={css.runDashboardMeta}>
+            start {formatTime(row.startedAt)} · end {formatTime(row.endedAt)}
+          </span>
+        )}
+      <span className={css.runDashboardMeta}>
+        active {formatDurationMs(row.activeDurationMs)} · wall {formatDurationMs(row.wallDurationMs)} · {row.segments.length} segments
+      </span>
+    </div>
+  )
+}
+
 function RunDashboardRows(props: {
   display: TimelineDisplay
   now: number
@@ -479,6 +617,11 @@ function RunDashboardRows(props: {
   setTreeWidth: (width: number) => void
   selectedAgentId: string | undefined
   onSelectAgent: (agentSessionId: string) => void
+  armedCloseId: string | undefined
+  controlState: AgentControlState
+  onOpenAgent: (row: TimelineDisplayRow) => void
+  onInterruptAgent: (row: TimelineDisplayRow) => void
+  onCloseAgent: (row: TimelineDisplayRow) => void
 }) {
   const {
     display,
@@ -490,6 +633,11 @@ function RunDashboardRows(props: {
     setTreeWidth,
     selectedAgentId,
     onSelectAgent,
+    armedCloseId,
+    controlState,
+    onOpenAgent,
+    onInterruptAgent,
+    onCloseAgent,
   } = props
   const width = timelineWidth(zoom)
   const range = display.range
@@ -520,41 +668,17 @@ function RunDashboardRows(props: {
     <div className={css.runDashboardGrid} role="treegrid" aria-label={t('subagent')}>
       <div className={css.runDashboardTree} style={{ width: treeWidth }}>
         {display.rows.map(row => (
-          <div
+          <RunDashboardTreeRow
             key={row.id}
-            role="row"
-            aria-level={row.depth + 1}
-            className={clsx(css.runDashboardRow, row.kind === 'root' && css.runDashboardRootRow)}
-            style={{ paddingLeft: 10 + row.depth * 16 }}
-          >
-            <span className={css.runDashboardRowHeader}>
-              <span className={css.runDashboardRowTitle}>{row.title}</span>
-              {row.longRunning && <span className={css.runDashboardWarn}>{t('runDashboardLongRunning')}</span>}
-              {row.kind === 'agent' && (
-                <button
-                  type="button"
-                  className={clsx(css.runDashboardDetailButton, selectedAgentId === row.id && css.runDashboardDetailButtonActive)}
-                  aria-label={`${t('runDashboardDetails')} ${row.title}`}
-                  onClick={() => { onSelectAgent(row.id) }}
-                >
-                  {t('runDashboardDetails')}
-                </button>
-              )}
-            </span>
-            <span className={css.runDashboardStatus}>{agentRowState(row)}</span>
-            {row.path !== undefined && <span className={css.runDashboardMeta}>{row.path}</span>}
-            {row.model !== undefined && <span className={css.runDashboardMeta}>{modelLabel(row.model)}</span>}
-            {row.kind === 'diagnostic'
-              ? <span className={css.runDashboardMeta}>{t('runDashboardTimeUnavailable')}</span>
-              : (
-                <span className={css.runDashboardMeta}>
-                  start {formatTime(row.startedAt)} · end {formatTime(row.endedAt)}
-                </span>
-              )}
-            <span className={css.runDashboardMeta}>
-              active {formatDurationMs(row.activeDurationMs)} · wall {formatDurationMs(row.wallDurationMs)} · {row.segments.length} segments
-            </span>
-          </div>
+            row={row}
+            selectedAgentId={selectedAgentId}
+            armedCloseId={armedCloseId}
+            controlState={controlState}
+            onOpenAgent={onOpenAgent}
+            onSelectAgent={onSelectAgent}
+            onInterruptAgent={onInterruptAgent}
+            onCloseAgent={onCloseAgent}
+          />
         ))}
       </div>
       <div
@@ -746,6 +870,8 @@ export function SubagentView(props: {
   const sessions = ctx.sessions
   const [loadState, setLoadState] = useState<TimelineLoadState>({ kind: 'idle' })
   const [detailState, setDetailState] = useState<AgentDetailLoadState>({ kind: 'idle' })
+  const [controlState, setControlState] = useState<AgentControlState>({ kind: 'idle' })
+  const [armedCloseId, setArmedCloseId] = useState<string | undefined>(undefined)
   const [filters, setFilters] = useState<TimelineDisplayFilters>({ state: 'all' })
   const [now, setNow] = useState(() => Date.now())
   const [zoom, setZoom] = useState(1)
@@ -783,8 +909,16 @@ export function SubagentView(props: {
     appliedSeqRef.current = undefined
     detailRequestRef.current?.abort()
     setDetailState({ kind: 'idle' })
+    setControlState({ kind: 'idle' })
+    setArmedCloseId(undefined)
     setLoadState(rootId === undefined ? { kind: 'idle' } : { kind: 'loading' })
   }, [rootId])
+
+  useEffect(() => {
+    if (armedCloseId === undefined) return
+    const timer = window.setTimeout(() => { setArmedCloseId(undefined) }, AGENT_CLOSE_ARM_MS)
+    return () => { window.clearTimeout(timer) }
+  }, [armedCloseId])
 
   const loadAgentDetail = useCallback((agentSessionId: string): void => {
     if (!active || rootId === undefined) return
@@ -809,6 +943,58 @@ export function SubagentView(props: {
     detailRequestRef.current?.abort()
     setDetailState({ kind: 'idle' })
   }, [])
+
+  const openAgent = useCallback((row: TimelineDisplayRow): void => {
+    const address = agentAddress(row)
+    if (address === undefined) return
+    props.onOpenChild?.(address)
+    if (props.onOpenChild === undefined) ctx.sessions.openSubagent?.(address)
+  }, [ctx.sessions, props])
+
+  const runAgentControl = useCallback(async (
+    action: AgentControlAction,
+    row: TimelineDisplayRow,
+  ): Promise<void> => {
+    const address = continuableAgentAddress(row)
+    if (address === undefined) {
+      setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'not-found' })
+      return
+    }
+    const control = action === 'interrupt'
+      ? ctx.sessions.interruptSubagent
+      : ctx.sessions.closeSubagent
+    if (control === undefined) {
+      setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'failed' })
+      return
+    }
+    setArmedCloseId(undefined)
+    setControlState({ kind: 'loading', agentSessionId: row.id, action })
+    try {
+      const outcome = action === 'interrupt'
+        ? await ctx.sessions.interruptSubagent!(address)
+        : await ctx.sessions.closeSubagent!(address, operationId())
+      setControlState({
+        kind: outcome === 'accepted' || outcome === 'closed' ? 'done' : 'error',
+        agentSessionId: row.id,
+        action,
+        outcome,
+      })
+    } catch {
+      setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'failed' })
+    }
+  }, [ctx.sessions])
+
+  const interruptAgent = useCallback((row: TimelineDisplayRow): void => {
+    void runAgentControl('interrupt', row)
+  }, [runAgentControl])
+
+  const closeAgent = useCallback((row: TimelineDisplayRow): void => {
+    if (armedCloseId !== row.id) {
+      setArmedCloseId(row.id)
+      return
+    }
+    void runAgentControl('close', row)
+  }, [armedCloseId, runAgentControl])
 
   const setTreeWidth = useCallback((width: number): void => {
     if (storeSnapshot?.state !== undefined && store !== undefined) {
@@ -967,6 +1153,11 @@ export function SubagentView(props: {
               setTreeWidth={setTreeWidth}
               selectedAgentId={detailState.kind === 'idle' ? undefined : detailState.agentSessionId}
               onSelectAgent={loadAgentDetail}
+              armedCloseId={armedCloseId}
+              controlState={controlState}
+              onOpenAgent={openAgent}
+              onInterruptAgent={interruptAgent}
+              onCloseAgent={closeAgent}
             />
           ))}
         <AgentDetailPanel

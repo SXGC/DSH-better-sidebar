@@ -26,7 +26,11 @@ function makeList(initial: SidebarSessionList) {
 
 type ListStore = ReturnType<typeof makeList>
 
-function makeCtx(list: ListStore, history: () => void = () => {}): Context {
+function makeCtx(
+  list: ListStore,
+  history: () => void = () => {},
+  controls: Partial<Context['sessions']> = {},
+): Context {
   return {
     sessions: {
       list,
@@ -34,6 +38,7 @@ function makeCtx(list: ListStore, history: () => void = () => {}): Context {
       openSubagent: () => {},
       open: () => {},
       refreshSubagents: async () => {},
+      ...controls,
     },
     connection: {
       api: {
@@ -468,6 +473,109 @@ describe('Run Dashboard view', () => {
     await act(async () => {})
 
     expect(container.textContent).toContain('任务不可用')
+    unmount()
+  })
+
+  it('opens a recoverable descendant chat from the dashboard row', async () => {
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const openChild = vi.fn()
+    const { container, unmount } = mount(
+      createElement(SubagentView, {
+        sessionId: 'root',
+        active: true,
+        ctx: makeCtx(list),
+        store,
+        onOpenChild: openChild,
+      }),
+    )
+    await act(async () => {})
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="打开聊天 worker"]') as HTMLButtonElement).click()
+    })
+
+    expect(openChild).toHaveBeenCalledWith({
+      parentSessionId: 'root',
+      childSessionId: 'child',
+      mode: 'continuable',
+    })
+    unmount()
+  })
+
+  it('interrupts and closes continuable agents with result feedback and close confirmation surviving refresh', async () => {
+    fetchQueue = [
+      {
+        ...baseTimeline,
+        agents: [{
+          ...baseTimeline.agents[0]!,
+          state: { residency: 'live', turn: { kind: 'running' } },
+          statePoints: [
+            { seq: 3, time: 3_000, transition: 'turn-started', state: { residency: 'live', turn: { kind: 'running' } } },
+          ],
+        }],
+      },
+      {
+        ...baseTimeline,
+        asOfSeq: 11,
+        agents: [{
+          ...baseTimeline.agents[0]!,
+          state: { residency: 'live', turn: { kind: 'running' } },
+          statePoints: [
+            { seq: 3, time: 3_000, transition: 'turn-started', state: { residency: 'live', turn: { kind: 'running' } } },
+          ],
+        }],
+      },
+    ]
+    const list = makeList(baseSnapshot())
+    const interruptSubagent = vi.fn(async () => 'accepted' as const)
+    const closeSubagent = vi.fn(async () => 'closed' as const)
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, {
+        sessionId: 'root',
+        active: true,
+        ctx: makeCtx(list, () => {}, { interruptSubagent, closeSubagent } as Partial<Context['sessions']>),
+        store,
+      }),
+    )
+    await act(async () => {})
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="中断 worker"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+    expect(interruptSubagent).toHaveBeenCalledWith({
+      parentSessionId: 'root',
+      childSessionId: 'child',
+      mode: 'continuable',
+    })
+    expect(container.textContent).toContain('accepted')
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="关闭 worker"]') as HTMLButtonElement).click()
+    })
+    expect(closeSubagent).not.toHaveBeenCalled()
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="刷新"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="确认关闭 worker"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+    expect(closeSubagent).toHaveBeenCalledWith({
+      parentSessionId: 'root',
+      childSessionId: 'child',
+      mode: 'continuable',
+    }, expect.any(String))
+    expect(container.textContent).toContain('closed')
+    expect(container.textContent).not.toContain('restart')
+    expect(container.textContent).not.toContain('重新运行')
     unmount()
   })
 })

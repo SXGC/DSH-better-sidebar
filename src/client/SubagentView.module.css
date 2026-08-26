@@ -279,6 +279,28 @@
   color: var(--dsw-alias-label-primary);
 }
 
+.runDashboardDetailButton:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.runDashboardDangerButton {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, var(--dsw-alias-border-l2));
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.runDashboardControlResult {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--dsw-font-xxxs-strong-11);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.runDashboardControlError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
 .runDashboardStatus,
 .runDashboardMeta {
   overflow: hidden;

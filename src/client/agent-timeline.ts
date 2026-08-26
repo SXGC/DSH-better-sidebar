@@ -18,6 +18,8 @@ export interface TimelineDisplayRow {
   kind: 'root' | 'agent' | 'diagnostic'
   title: string
   depth: number
+  parentSessionId?: string
+  mode?: AgentTimelineRow['mode']
   path?: string
   model?: SpawnModelSelection
   state?: AgentState
@@ -154,6 +156,8 @@ function agentDisplayRow(row: AgentTimelineRow, depth: number, now: number, long
     kind: 'agent',
     title: row.label ?? row.path.split('/').filter(Boolean).at(-1) ?? row.sessionId,
     depth,
+    parentSessionId: row.parentSessionId,
+    mode: row.mode,
     path: row.path,
     model: row.modelSelection,
     state: row.state,

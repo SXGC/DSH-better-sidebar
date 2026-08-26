@@ -199,6 +199,16 @@ export interface SidebarSubagentAddress {
   mode: 'one-shot' | 'continuable'
 }
 
+export type SidebarContinuableSubagentAddress = SidebarSubagentAddress & { mode: 'continuable' }
+
+export type SidebarSubagentControlOutcome =
+  | 'accepted'
+  | 'forbidden'
+  | 'not-found'
+  | 'not-live'
+  | 'closed'
+  | 'failed'
+
 /** Minimal structural mirror of one session event (the subagent history tail). */
 export interface SidebarSessionEvent {
   type: string
@@ -306,6 +316,16 @@ export interface SidebarSessionsService {
    * (mirror of the runtime ISessions.openSubagent).
    */
   openSubagent?(address: SidebarSubagentAddress): void
+  /**
+   * Interrupt one native continuable descendant through the host's public
+   * subagent control surface.
+   */
+  interruptSubagent?(address: SidebarContinuableSubagentAddress): Promise<SidebarSubagentControlOutcome>
+  /**
+   * Permanently close one native continuable descendant. The operation id is
+   * supplied by the caller for replay-safe admission.
+   */
+  closeSubagent?(address: SidebarContinuableSubagentAddress, operationId: string): Promise<SidebarSubagentControlOutcome>
   /**
    * Resolve an already discovered direct-parent address without opening it.
    */
