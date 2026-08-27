@@ -2,8 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { buildAgentTimelineApi } from '../src/agent-timeline-routes.ts'
 import type { Context, SidebarSessionEvent } from '../src/context-types.ts'
 
-type FakeFoldState = ReturnType<typeof foldRoot>
-
 const model = {
   provider: 'deepseek-official',
   model: 'deepseek-v4',
@@ -80,66 +78,30 @@ function childTask(id: string, text: string): SidebarSessionEvent {
   })
 }
 
-function foldRoot(rootSessionId: string, events: readonly SidebarSessionEvent[]) {
+/** Mirrors the host SubagentNextRuntime.snapshot projection semantics. */
+function projectionOf(rootSessionId: string, events: readonly SidebarSessionEvent[]) {
   if (rootSessionId !== 'root') throw new Error('unexpected root')
-  const nodesByPath = new Map<string, Record<string, unknown>>()
-  const pathsBySession = new Map<string, string>([[rootSessionId, '/root']])
+  const nodes = new Map<string, Record<string, unknown>>()
   const latest = new Map<string, { state: unknown }>()
   for (const entry of events) {
     if (entry.type === 'subagent-next/agent-declared') {
-      const data = entry.data
-      nodesByPath.set(String(data.path), {
-        operationId: data.operationId,
-        requestHash: data.requestHash,
-        path: data.path,
-        parentSessionId: data.parentSessionId,
-        childSessionId: data.childSessionId,
-        backend: data.backend,
-        forkTurns: data.forkTurns,
-        delegationPolicy: data.delegationPolicy,
-        lifecycle: 'provisioning',
-      })
-      pathsBySession.set(String(data.childSessionId), String(data.path))
-    } else if (entry.type === 'subagent-next/agent-ready') {
-      const receipt = entry.data.receipt as Record<string, unknown>
-      const node = nodesByPath.get(String(receipt.path))
-      if (node !== undefined) node.receipt = receipt
+      nodes.set(String(entry.data.childSessionId), entry.data as Record<string, unknown>)
     } else if (entry.type === 'subagent-next/state-changed') {
       latest.set(String(entry.data.agentSessionId), { state: entry.data.state })
     }
   }
-  const agents = [...nodesByPath.values()].map(node => ({
-    sessionId: node.childSessionId,
-    parentSessionId: node.parentSessionId,
-    path: node.path,
-    mode: 'continuable',
-    label: String(node.path).slice(String(node.path).lastIndexOf('/') + 1),
-    state: latest.get(String(node.childSessionId))?.state ?? { residency: 'live', turn: { kind: 'provisioning' } },
-    modelSelection: (node.delegationPolicy as { effectiveModelSelection: unknown }).effectiveModelSelection,
-    hasChildren: [...nodesByPath.values()].some(child => child.parentSessionId === node.childSessionId),
-  }))
   return {
-    root: { path: '/root', sessionId: rootSessionId },
-    nodesByPath,
-    pathsBySession,
-    operations: new Map(),
-    messageOperations: new Map(),
-    messages: new Map(),
-    delivered: new Map(),
-    discarded: new Map(),
-    mailboxGenerations: new Map(),
-    observedMailboxGenerations: new Map(),
-    waitOperations: new Map(),
-    activeWaits: new Map(),
-    interruptOperations: new Map(),
-    closeOperations: new Map(),
-    closeObservations: new Map(),
-    closedSubtrees: new Map(),
-    projection: {
-      rootSessionId,
-      asOfSeq: events.reduce((max, item) => Math.max(max, item.seq), -1),
-      agents,
-    },
+    asOfSeq: events.reduce((max, item) => Math.max(max, item.seq), -1),
+    agents: [...nodes.values()].map(node => ({
+      sessionId: node.childSessionId,
+      parentSessionId: node.parentSessionId,
+      path: node.path,
+      mode: 'continuable',
+      label: String(node.path).slice(String(node.path).lastIndexOf('/') + 1),
+      state: latest.get(String(node.childSessionId))?.state ?? { residency: 'live', turn: { kind: 'provisioning' } },
+      modelSelection: (node.delegationPolicy as { effectiveModelSelection: unknown }).effectiveModelSelection,
+      hasChildren: [...nodes.values()].some(child => child.parentSessionId === node.childSessionId),
+    })),
   }
 }
 
@@ -147,7 +109,13 @@ function ctxWith(options: {
   live?: Record<string, { header: Record<string, unknown>; events: SidebarSessionEvent[] }>
   persisted?: Record<string, { meta: Record<string, unknown>; events: SidebarSessionEvent[] }>
   inspectError?: Error
+  /** Override the subagentNext service; 'absent' models a deployment without it. */
+  subagentNext?: { snapshot(rootSessionId: string): Promise<unknown> | unknown } | 'absent'
 }): Context {
+  const eventsFor = (id: string): SidebarSessionEvent[] =>
+    options.live?.[id]?.events ?? options.persisted?.[id]?.events ?? []
+  const subagentNext = options.subagentNext
+    ?? { snapshot: async (rootSessionId: string) => projectionOf(rootSessionId, eventsFor(rootSessionId)) }
   return {
     sessions: {
       get: (id: string) => options.live?.[id],
@@ -161,11 +129,11 @@ function ctxWith(options: {
             return found
           }),
         }
-      : undefined,
+      : key === 'subagentNext' && subagentNext !== 'absent'
+        ? subagentNext
+        : undefined,
   } as unknown as Context
 }
-
-const loader = async () => ({ foldSubagentNext: foldRoot as never })
 
 describe('agents.timeline route', () => {
   it('projects restored native descendants with spawn order, all state points, cold/completed states, and no sensitive fields', async () => {
@@ -185,7 +153,7 @@ describe('agents.timeline route', () => {
     ]
     const api = buildAgentTimelineApi(ctxWith({
       persisted: { root: { meta: { id: 'root', version: 0, createdAt: 999_999 }, events: rootEvents } },
-    }), loader)
+    }))
 
     const value = await api.timeline({ sessionId: 'root' })
 
@@ -207,37 +175,38 @@ describe('agents.timeline route', () => {
   it('rejects non-root sessions and corrupted root journals with the specified errors', async () => {
     const api = buildAgentTimelineApi(ctxWith({
       live: { child: { header: { id: 'child', parentSession: 'root' }, events: [] } },
-    }), loader)
+    }))
     await expect(api.timeline({ sessionId: 'child' })).rejects.toMatchObject({ code: 'not-found', status: 404 })
 
     const corrupt = buildAgentTimelineApi(ctxWith({
       live: { root: { header: { id: 'root' }, events: [] } },
-    }), async () => ({ foldSubagentNext: () => { throw new Error('bad native journal') } }))
+      subagentNext: { snapshot: () => { throw new Error('bad native journal') } },
+    }))
     await expect(corrupt.timeline({ sessionId: 'root' })).rejects.toMatchObject({ code: 'agent-error', status: 409 })
   })
 
   it('maps persistence missing, corruption, unsupported, and unclassified root reads distinctly', async () => {
     const missing = buildAgentTimelineApi(ctxWith({
       inspectError: new Error('session "missing-root" not found'),
-    }), loader)
+    }))
     await expect(missing.timeline({ sessionId: 'missing-root' }))
       .rejects.toMatchObject({ code: 'not-found', status: 404 })
 
     const corruptionError = new Error('stored session log is corrupt')
     corruptionError.name = 'SessionPersistenceCorruptionError'
-    const corrupt = buildAgentTimelineApi(ctxWith({ inspectError: corruptionError }), loader)
+    const corrupt = buildAgentTimelineApi(ctxWith({ inspectError: corruptionError }))
     await expect(corrupt.timeline({ sessionId: 'corrupt-root' }))
       .rejects.toMatchObject({ code: 'agent-error', status: 409 })
 
     const unsupportedError = new Error('unsupported session format')
     unsupportedError.name = 'SessionFormatUnsupportedError'
-    const unsupported = buildAgentTimelineApi(ctxWith({ inspectError: unsupportedError }), loader)
+    const unsupported = buildAgentTimelineApi(ctxWith({ inspectError: unsupportedError }))
     await expect(unsupported.timeline({ sessionId: 'old-root' }))
       .rejects.toMatchObject({ code: 'agent-error', status: 409 })
 
     const unknownVersion = buildAgentTimelineApi(ctxWith({
       inspectError: new Error('unknown session event version'),
-    }), loader)
+    }))
     await expect(unknownVersion.timeline({ sessionId: 'root' }))
       .rejects.toMatchObject({ code: 'internal', status: 500 })
   })
@@ -261,7 +230,7 @@ describe('agents.detail route', () => {
           ],
         },
       },
-    }), loader)
+    }))
 
     const value = await api.detail({ sessionId: 'root', agentSessionId: 'child' })
 
@@ -286,7 +255,7 @@ describe('agents.detail route', () => {
     const rootEvents = [declared(1, 'failed-child')]
     const api = buildAgentTimelineApi(ctxWith({
       live: { root: { header: { id: 'root' }, events: rootEvents } },
-    }), loader)
+    }))
 
     await expect(api.detail({ sessionId: 'root', agentSessionId: 'root' }))
       .rejects.toMatchObject({ code: 'not-found', status: 404 })
@@ -300,15 +269,16 @@ describe('agents.detail route', () => {
     const readyApi = buildAgentTimelineApi(ctxWith({
       live: { root: { header: { id: 'root' }, events: [declared(1, 'child'), ready(2, 'child')] } },
       inspectError: new Error('temporarily unavailable'),
-    }), loader)
+    }))
     await expect(readyApi.detail({ sessionId: 'root', agentSessionId: 'child' }))
       .resolves.toMatchObject({ initialTask: { available: false, reason: 'session-unavailable' } })
   })
 
-  it('fails explicitly when the DSH subagent-next baseline module is unavailable', async () => {
+  it('fails explicitly when the host has no subagentNext service', async () => {
     const api = buildAgentTimelineApi(ctxWith({
       live: { root: { header: { id: 'root' }, events: [] } },
-    }), async () => { throw new Error('Cannot find package @deepseek-ai/dsh-subagent-next') })
+      subagentNext: 'absent',
+    }))
 
     await expect(api.timeline({ sessionId: 'root' })).rejects.toMatchObject({
       code: 'agent-error',

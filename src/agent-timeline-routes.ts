@@ -109,14 +109,15 @@ interface DelegationPolicyLike {
   filesystemPolicy: 'closed'
 }
 
-interface SpawnNodeLike {
-  path: string
-  parentSessionId: string
+/** One spawn declaration, read straight from the root journal's
+ * `subagent-next/agent-declared` event (the fold's SpawnNode is a verbatim
+ * copy of this payload); the receipt messageId arrives with `agent-ready`. */
+interface SpawnDeclaration {
   childSessionId: string
   backend: string
   forkTurns: AgentDetailResult['forkTurns']
   delegationPolicy: DelegationPolicyLike
-  receipt?: { messageId?: unknown }
+  receiptMessageId?: string
 }
 
 interface AgentSummaryLike {
@@ -130,59 +131,29 @@ interface AgentSummaryLike {
   hasChildren: boolean
 }
 
-interface FoldStateLike {
-  nodesByPath: Map<string, SpawnNodeLike>
-  projection: {
-    asOfSeq: number
-    agents: readonly AgentSummaryLike[]
-  }
+interface SubagentNextProjectionLike {
+  asOfSeq: number
+  agents: readonly AgentSummaryLike[]
 }
 
-type FoldLoader = () => Promise<{
-  foldSubagentNext(rootSessionId: string, events: readonly SidebarSessionEvent[]): FoldStateLike
-}>
+/**
+ * The minimal slice of the host's `subagentNext` cordis service these routes
+ * consume: the authoritative content-free collaboration projection of one
+ * root session (live session first, persistence fallback, root identity
+ * checked — all owned by the host). Consumed through `ctx.get` like
+ * `sessionPersistence`, never by importing DSH internals.
+ */
+interface SubagentNextServiceLike {
+  snapshot(rootSessionId: string, signal?: AbortSignal): Promise<SubagentNextProjectionLike>
+}
 
 const BASELINE_COMMIT = '5cf09d3a0a'
 
-const defaultFoldLoader: FoldLoader = async () => {
-  const specifier = '@deepseek-ai/dsh-subagent-next'
-  return await import(specifier) as {
-    foldSubagentNext(rootSessionId: string, events: readonly SidebarSessionEvent[]): FoldStateLike
-  }
-}
-
-export function buildAgentTimelineApi(ctx: Context, loadFold: FoldLoader = defaultFoldLoader): SidebarAgentTimelineRoutes {
+export function buildAgentTimelineApi(ctx: Context): SidebarAgentTimelineRoutes {
   const readRoot = async (sessionId: string): Promise<SessionSnapshot> => {
-    const snapshot = await readSession(ctx, sessionId)
-    if (snapshot.header.parentSession !== undefined) {
-      throw new SidebarError('not-found', 'agent timeline root not found', 404)
-    }
-    return snapshot
-  }
-
-  const foldRoot = async (rootSessionId: string, events: readonly SidebarSessionEvent[]): Promise<FoldStateLike> => {
-    let module: Awaited<ReturnType<FoldLoader>>
-    try {
-      module = await loadFold()
-    } catch {
-      throw new SidebarError(
-        'agent-error',
-        `agent timeline requires DSH subagent-next public API at or after ${BASELINE_COMMIT}`,
-        409,
-      )
-    }
-    try {
-      return module.foldSubagentNext(rootSessionId, events)
-    } catch (error) {
-      if (error instanceof SidebarError) throw error
-      throw new SidebarError('agent-error', 'agent timeline is unavailable', 409)
-    }
-  }
-
-  const rootState = async (rootSessionId: string): Promise<{ snapshot: SessionSnapshot; fold: FoldStateLike }> => {
     let snapshot: SessionSnapshot
     try {
-      snapshot = await readRoot(rootSessionId)
+      snapshot = await readSession(ctx, sessionId)
     } catch (error) {
       if (isPersistenceRootJournalError(error)) {
         throw new SidebarError('agent-error', 'agent timeline is unavailable', 409)
@@ -191,14 +162,38 @@ export function buildAgentTimelineApi(ctx: Context, loadFold: FoldLoader = defau
       const message = error instanceof Error ? error.message : String(error)
       throw new SidebarError('internal', message, 500)
     }
-    return { snapshot, fold: await foldRoot(rootSessionId, snapshot.events) }
+    if (snapshot.header.parentSession !== undefined) {
+      throw new SidebarError('not-found', 'agent timeline root not found', 404)
+    }
+    return snapshot
+  }
+
+  // The projection comes from the host's own runtime, so a deployment
+  // without subagent-next degrades to one explicit 409 instead of a
+  // module-resolution accident.
+  const serviceProjection = async (rootSessionId: string): Promise<SubagentNextProjectionLike> => {
+    const runtime = ctx.get('subagentNext') as SubagentNextServiceLike | undefined
+    if (runtime === undefined || typeof runtime.snapshot !== 'function') {
+      throw new SidebarError(
+        'agent-error',
+        `agent timeline requires the DSH subagentNext service (baseline ${BASELINE_COMMIT})`,
+        409,
+      )
+    }
+    try {
+      return await runtime.snapshot(rootSessionId)
+    } catch (error) {
+      if (error instanceof SidebarError) throw error
+      throw new SidebarError('agent-error', 'agent timeline is unavailable', 409)
+    }
   }
 
   return {
     async timeline(payload) {
       const sessionId = requireString(payload, 'sessionId')
-      const { snapshot, fold } = await rootState(sessionId)
-      return timelineResult(sessionId, snapshot, fold)
+      const snapshot = await readRoot(sessionId)
+      const projection = await serviceProjection(sessionId)
+      return timelineResult(sessionId, snapshot, projection)
     },
     async detail(payload) {
       const sessionId = requireString(payload, 'sessionId')
@@ -206,12 +201,14 @@ export function buildAgentTimelineApi(ctx: Context, loadFold: FoldLoader = defau
       if (agentSessionId === sessionId) {
         throw new SidebarError('not-found', 'agent not found', 404)
       }
-      const { fold } = await rootState(sessionId)
-      const node = nodeBySession(fold, agentSessionId)
-      if (node === undefined) {
+      // The spawn declaration IS the root journal event payload: no
+      // projection or fold needed to answer a detail read.
+      const snapshot = await readRoot(sessionId)
+      const declaration = spawnDeclarationOf(snapshot.events, agentSessionId)
+      if (declaration === undefined) {
         throw new SidebarError('not-found', 'agent not found', 404)
       }
-      return detailResult(ctx, node)
+      return detailResult(ctx, declaration)
     },
   }
 }
@@ -251,7 +248,11 @@ function isPersistenceRootJournalError(error: unknown): boolean {
   return name === 'SessionPersistenceCorruptionError' || name === 'SessionFormatUnsupportedError'
 }
 
-function timelineResult(rootSessionId: string, snapshot: SessionSnapshot, fold: FoldStateLike): AgentTimelineResult {
+function timelineResult(
+  rootSessionId: string,
+  snapshot: SessionSnapshot,
+  projection: SubagentNextProjectionLike,
+): AgentTimelineResult {
   return {
     root: {
       sessionId: rootSessionId,
@@ -259,8 +260,8 @@ function timelineResult(rootSessionId: string, snapshot: SessionSnapshot, fold: 
       startedAt: firstEventAt(snapshot.events),
       lastEventAt: lastEventAt(snapshot.events),
     },
-    asOfSeq: fold.projection.asOfSeq,
-    agents: treeSortedRows(rootSessionId, snapshot.events, fold),
+    asOfSeq: projection.asOfSeq,
+    agents: treeSortedRows(rootSessionId, snapshot.events, projection),
   }
 }
 
@@ -276,28 +277,32 @@ function lastEventAt(events: readonly SidebarSessionEvent[]): number | null {
   return last
 }
 
-function treeSortedRows(rootSessionId: string, events: readonly SidebarSessionEvent[], fold: FoldStateLike): AgentTimelineRow[] {
+function treeSortedRows(
+  rootSessionId: string,
+  events: readonly SidebarSessionEvent[],
+  projection: SubagentNextProjectionLike,
+): AgentTimelineRow[] {
   const declarations = declarationsOf(events)
   const statePoints = statePointsOf(events)
-  const summaries = new Map(fold.projection.agents.map(agent => [agent.sessionId, agent]))
-  const rows = [...fold.nodesByPath.values()].map((node): AgentTimelineRow => {
-    const declaration = declarations.get(node.childSessionId)
-    const points = statePoints.get(node.childSessionId) ?? []
-    const summary = summaries.get(node.childSessionId)
-    return {
-      sessionId: node.childSessionId,
-      parentSessionId: node.parentSessionId,
-      path: node.path,
-      mode: summary?.mode ?? 'continuable',
-      ...(summary?.label !== undefined ? { label: summary.label } : {}),
-      state: points.at(-1)?.state ?? summary?.state ?? { residency: 'live', turn: { kind: 'provisioning' } },
-      modelSelection: cloneModelSelection(summary?.modelSelection ?? node.delegationPolicy.effectiveModelSelection),
-      hasChildren: summary?.hasChildren ?? [...fold.nodesByPath.values()].some(child => child.parentSessionId === node.childSessionId),
-      declaredAt: declaration?.time ?? 0,
-      declarationSeq: declaration?.seq ?? -1,
-      statePoints: points,
-    }
-  })
+  const rows = projection.agents
+    .filter(agent => agent.sessionId !== rootSessionId)
+    .map((agent): AgentTimelineRow => {
+      const declaration = declarations.get(agent.sessionId)
+      const points = statePoints.get(agent.sessionId) ?? []
+      return {
+        sessionId: agent.sessionId,
+        parentSessionId: agent.parentSessionId,
+        path: agent.path,
+        mode: agent.mode ?? 'continuable',
+        ...(agent.label !== undefined ? { label: agent.label } : {}),
+        state: points.at(-1)?.state ?? cloneState(agent.state),
+        modelSelection: cloneModelSelection(agent.modelSelection),
+        hasChildren: agent.hasChildren,
+        declaredAt: declaration?.time ?? 0,
+        declarationSeq: declaration?.seq ?? -1,
+        statePoints: points,
+      }
+    })
   return sortRowsAsTree(rootSessionId, rows)
 }
 
@@ -363,31 +368,88 @@ function sortRowsAsTree(rootSessionId: string, rows: AgentTimelineRow[]): AgentT
   return sorted
 }
 
-function nodeBySession(fold: FoldStateLike, sessionId: string): SpawnNodeLike | undefined {
-  for (const node of fold.nodesByPath.values()) {
-    if (node.childSessionId === sessionId) return node
+/**
+ * Read one child's spawn declaration straight from the root journal:
+ * `agent-declared` carries the whole whitelisted configuration, and the
+ * matching `agent-ready` receipt names the initial-task message.
+ */
+function spawnDeclarationOf(
+  events: readonly SidebarSessionEvent[],
+  agentSessionId: string,
+): SpawnDeclaration | undefined {
+  let operationId: string | undefined
+  let declaration: SpawnDeclaration | undefined
+  for (const event of events) {
+    if (event.type === 'subagent-next/agent-declared') {
+      const data = event.data as Record<string, unknown>
+      if (data.childSessionId !== agentSessionId) continue
+      if (typeof data.operationId !== 'string'
+        || typeof data.backend !== 'string'
+        || !isForkTurns(data.forkTurns)
+        || !isDelegationPolicy(data.delegationPolicy)) {
+        continue
+      }
+      operationId = data.operationId
+      declaration = {
+        childSessionId: agentSessionId,
+        backend: data.backend,
+        forkTurns: data.forkTurns,
+        delegationPolicy: data.delegationPolicy,
+      }
+      continue
+    }
+    if (event.type === 'subagent-next/agent-ready' && declaration !== undefined) {
+      const data = event.data as { operationId?: unknown; receipt?: unknown }
+      if (data.operationId !== operationId) continue
+      const receipt = data.receipt as { messageId?: unknown } | undefined
+      const messageId = receipt?.messageId
+      if (typeof messageId === 'string' && messageId !== '') declaration.receiptMessageId = messageId
+    }
   }
-  return undefined
+  return declaration
 }
 
-async function detailResult(ctx: Context, node: SpawnNodeLike): Promise<AgentDetailResult> {
+function isForkTurns(value: unknown): value is AgentDetailResult['forkTurns'] {
+  return value === 'none' || value === 'all' || (typeof value === 'number' && Number.isFinite(value))
+}
+
+function isDelegationPolicy(value: unknown): value is DelegationPolicyLike {
+  if (value === null || typeof value !== 'object') return false
+  const policy = value as Record<string, unknown>
+  return isModelSelection(policy.requestedModelSelection)
+    && isModelSelection(policy.effectiveModelSelection)
+    && Array.isArray(policy.allowedTools)
+    && policy.allowedTools.every(tool => typeof tool === 'string')
+    && (policy.sandboxMode === null || policy.sandboxMode === 'read-only'
+      || policy.sandboxMode === 'workspace-write' || policy.sandboxMode === 'danger-full-access')
+    && (policy.approvalPolicy === null || policy.approvalPolicy === 'never')
+    && policy.filesystemPolicy === 'closed'
+}
+
+function isModelSelection(value: unknown): value is SpawnModelSelection {
+  if (value === null || typeof value !== 'object') return false
+  const selection = value as Record<string, unknown>
+  return typeof selection.provider === 'string' && typeof selection.model === 'string'
+}
+
+async function detailResult(ctx: Context, declaration: SpawnDeclaration): Promise<AgentDetailResult> {
   const base = {
-    sessionId: node.childSessionId,
-    backend: node.backend,
-    forkTurns: node.forkTurns,
-    requestedModelSelection: cloneModelSelection(node.delegationPolicy.requestedModelSelection),
-    effectiveModelSelection: cloneModelSelection(node.delegationPolicy.effectiveModelSelection),
-    allowedTools: [...node.delegationPolicy.allowedTools],
-    sandboxMode: node.delegationPolicy.sandboxMode,
-    approvalPolicy: node.delegationPolicy.approvalPolicy,
-    filesystemPolicy: node.delegationPolicy.filesystemPolicy,
+    sessionId: declaration.childSessionId,
+    backend: declaration.backend,
+    forkTurns: declaration.forkTurns,
+    requestedModelSelection: cloneModelSelection(declaration.delegationPolicy.requestedModelSelection),
+    effectiveModelSelection: cloneModelSelection(declaration.delegationPolicy.effectiveModelSelection),
+    allowedTools: [...declaration.delegationPolicy.allowedTools],
+    sandboxMode: declaration.delegationPolicy.sandboxMode,
+    approvalPolicy: declaration.delegationPolicy.approvalPolicy,
+    filesystemPolicy: declaration.delegationPolicy.filesystemPolicy,
   }
-  const messageId = node.receipt?.messageId
-  if (typeof messageId !== 'string' || messageId === '') {
+  const messageId = declaration.receiptMessageId
+  if (messageId === undefined) {
     return { ...base, initialTask: { available: false, reason: 'not-accepted' } }
   }
   try {
-    const child = await readSession(ctx, node.childSessionId)
+    const child = await readSession(ctx, declaration.childSessionId)
     const text = initialTaskText(child.events, messageId)
     return text === undefined
       ? { ...base, initialTask: { available: false, reason: 'session-unavailable' } }
