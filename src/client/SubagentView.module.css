@@ -311,6 +311,9 @@
   left: 0;
   z-index: 1;
   min-width: 128px;
+  /* The column has a user-dragged width; anything a row fails to truncate
+     must clip HERE, never bleed over the splitter into the canvas. */
+  overflow: hidden;
   background: var(--dsw-alias-bg-base);
   border-right: 1px solid var(--dsw-alias-border-l1);
 }
@@ -502,7 +505,10 @@
 
 .runDashboardGrid .runDashboardRowSpan {
   position: static;
-  flex: none;
+  /* Shrinkable, or a narrow tree column lets the figures run over the
+     splitter into the gantt canvas; the tooltip keeps the full text. */
+  flex: 0 1 auto;
+  min-width: 0;
   width: auto;
   height: auto;
   margin: 0;
@@ -586,6 +592,11 @@
 
 .runDashboardRowStatus {
   flex: none;
+  /* Wraps to its own header line when wide; past a full column width it
+     truncates — the duration tooltip already spells the exact figures. */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font: var(--dsw-font-xxxs-strong-11);
   font-variant-numeric: tabular-nums;
   color: var(--dsw-alias-label-tertiary);
