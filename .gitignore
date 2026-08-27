@@ -156,4 +156,5 @@ test-results/
 
 # Local coding workspaces
 .coding/changes/
+.coding/visual-companion/
 .worktrees/
