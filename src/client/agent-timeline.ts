@@ -202,6 +202,23 @@ export function timelineTicks(range: TimelineDisplay['range'], widthPx: number):
 }
 
 /**
+ * The last instant a fitted viewport must still include. A live open segment
+ * keeps running to `now`, but an open `cold` tail is DRAWN as a short stub at
+ * its start (see {@link displaySegments}), so it must not drag the fit hours
+ * to the right of the last visible bar.
+ */
+export function timelineContentEnd(rows: readonly TimelineDisplayRow[], now: number): number | undefined {
+  let end: number | undefined
+  for (const row of rows) {
+    for (const segment of row.segments) {
+      const segmentEnd = segment.end ?? (segment.state.residency === 'cold' ? segment.start : now)
+      end = end === undefined ? segmentEnd : Math.max(end, segmentEnd)
+    }
+  }
+  return end
+}
+
+/**
  * Elapsed time in at most two adjacent units, localized through the passed
  * translator. Shared by agent rows and background jobs so one run reads with
  * one duration vocabulary; hours is the widest unit.

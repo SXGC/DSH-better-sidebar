@@ -44,6 +44,7 @@ import {
   formatAgentState,
   formatDuration,
   normalizeLongRunningMinutes,
+  timelineContentEnd,
   timelineTicks,
   type TimelineDisplay,
   type TimelineDisplayFilters,
@@ -360,6 +361,15 @@ const RUN_DASHBOARD_GANTT_MIN_PANEL = 520
 const TIMELINE_BASE_WIDTH = 600
 const TIMELINE_PAN_STEP = 64
 const TIMELINE_ZOOM_FACTOR = 1.25
+/**
+ * Zoom bounds shared by the buttons and fit-all. The ceiling must leave
+ * fit-all room to stretch a mostly-idle range (activity in the first hour,
+ * open tail running to now) until the ACTIVE part fills the viewport.
+ */
+const TIMELINE_MIN_ZOOM = 0.25
+const TIMELINE_MAX_ZOOM = 64
+/** Fit-all's breathing room after the last bar, so it never kisses the edge. */
+const TIMELINE_FIT_PADDING_PX = 24
 const TREE_KEYBOARD_STEP = 16
 /** Narrowest gantt bar that can carry its state word without clipping it. */
 const SEGMENT_LABEL_MIN_PX = 54
@@ -479,6 +489,28 @@ function formatTime(value: number | undefined): string {
 
 function timelineWidth(zoom: number): number {
   return Math.round(TIMELINE_BASE_WIDTH * zoom)
+}
+
+function clampZoom(zoom: number): number {
+  return Math.min(TIMELINE_MAX_ZOOM, Math.max(TIMELINE_MIN_ZOOM, zoom))
+}
+
+/**
+ * The zoom that makes the drawn activity span exactly fill a viewport (minus
+ * the trailing padding): range→content stretches the canvas past the blank
+ * tail, viewport→base scales it to the actual panel. Undefined when nothing
+ * is measured or drawn yet — the caller falls back to the neutral zoom.
+ */
+function fitZoom(
+  viewportPx: number,
+  range: TimelineDisplay['range'],
+  contentEnd: number | undefined,
+): number | undefined {
+  const viewport = viewportPx - TIMELINE_FIT_PADDING_PX
+  if (viewport <= 0 || range === null || contentEnd === undefined) return undefined
+  const span = Math.max(1, range.end - range.start)
+  const contentSpan = Math.max(1, Math.min(contentEnd, range.end) - range.start)
+  return clampZoom((span / contentSpan) * (viewport / TIMELINE_BASE_WIDTH))
 }
 
 /** A segment's placement on the shared range, in percent of the canvas. */
@@ -1561,7 +1593,7 @@ export function SubagentView(props: {
     const oldWidth = timelineWidth(zoom)
     const anchor = scroller === null ? 0 : scroller.clientWidth / 2
     const ratio = scroller === null ? 0 : (scroller.scrollLeft + anchor) / oldWidth
-    const nextZoom = Math.min(8, Math.max(0.25, zoom * factor))
+    const nextZoom = clampZoom(zoom * factor)
     setZoom(nextZoom)
     if (scroller !== null) {
       cancelZoomFrame()
@@ -1575,9 +1607,15 @@ export function SubagentView(props: {
   const zoomOut = useCallback((): void => { zoomBy(1 / TIMELINE_ZOOM_FACTOR) }, [zoomBy])
   const fitAll = useCallback((): void => {
     cancelZoomFrame()
-    setZoom(1)
-    scrollerRef.current?.scrollTo({ left: 0 })
-  }, [cancelZoomFrame])
+    const scroller = scrollerRef.current
+    const rows = filteredDisplay?.rows
+    setZoom(fitZoom(
+      scroller?.clientWidth ?? 0,
+      filteredDisplay?.range ?? null,
+      rows === undefined ? undefined : timelineContentEnd(rows, now),
+    ) ?? 1)
+    scroller?.scrollTo({ left: 0 })
+  }, [cancelZoomFrame, filteredDisplay, now])
   const panRight = useCallback((): void => {
     cancelZoomFrame()
     const scroller = scrollerRef.current

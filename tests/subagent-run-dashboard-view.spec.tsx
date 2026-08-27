@@ -357,6 +357,37 @@ describe('Run Dashboard view', () => {
     unmount()
   })
 
+  it('fits all to the viewport: the drawn activity fills the panel and the blank tail stays off-screen', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(20_000)
+    try {
+      const snapshot = baseSnapshot()
+      snapshot.byId.root = { ...snapshot.byId.root!, running: false }
+      const list = makeList(snapshot)
+      const store = wideStore()
+      const { container, unmount } = mount(
+        createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+      )
+      await act(async () => {})
+      const scroller = container.querySelector('[data-timeline-scroller]') as HTMLElement
+      scroller.scrollLeft = 40
+
+      const fit = container.querySelector('button[aria-label="适配全部"]') as HTMLButtonElement
+      await act(async () => { fit.click() })
+
+      // The range runs to now=20_000 (the child's open cold tail) but drawn
+      // activity ends at the root's 10_000. Fit stretches the canvas until
+      // the active 9/19 of the range fills the stubbed 320px viewport minus
+      // the 24px trailing padding; the blank tail scrolls off to the right.
+      const width = Number((container.querySelector('[data-timeline-canvas]') as HTMLElement).dataset.timelineWidth)
+      expect(width).toBe(Math.round((19_000 / 9_000) * (320 - 24)))
+      expect(scroller.scrollLeft).toBe(0)
+      unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('renders the mobile fallback list with the same row actions but without the shared gantt area', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true })
     fetchQueue = [{

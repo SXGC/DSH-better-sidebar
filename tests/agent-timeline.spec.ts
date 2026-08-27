@@ -5,6 +5,7 @@ import {
   filterTimelineDisplay,
   formatAgentState,
   normalizeLongRunningMinutes,
+  timelineContentEnd,
   type TimelineDisplayRow,
 } from '../src/client/agent-timeline.ts'
 import type { AgentState, AgentTimelineResult, AgentTimelineRow } from '../src/agent-timeline-routes.ts'
@@ -130,6 +131,20 @@ describe('agent timeline client projection', () => {
     expect(row.segments.at(-1)).toEqual({ start: 5_000, state: { residency: 'cold', lastTurn: 'idle' } })
     expect(row.activeDurationMs).toBe(4_000)
     expect(row.wallDurationMs).toBe(10_000)
+  })
+
+  it('reports the last drawn instant: open live tails run to now, open cold tails stop at their start', () => {
+    const coldTail = {
+      segments: [
+        { start: 1_000, end: 4_000, state: state('running') },
+        { start: 4_000, state: { residency: 'cold', lastTurn: 'idle' } },
+      ],
+    } as TimelineDisplayRow
+    const liveTail = { segments: [{ start: 2_000, state: state('running') }] } as TimelineDisplayRow
+
+    expect(timelineContentEnd([coldTail], 30_000)).toBe(4_000)
+    expect(timelineContentEnd([coldTail, liveTail], 30_000)).toBe(30_000)
+    expect(timelineContentEnd([], 30_000)).toBeUndefined()
   })
 
   it('formats all dashboard states including cold as unloaded in both locales', () => {
