@@ -257,14 +257,16 @@ describe('Run Dashboard view', () => {
       )
       await act(async () => {})
 
+      // The path lives in the title tooltip now, not in the row text.
+      const rootTitle = () => container.querySelector('[data-run-dashboard-row-id="root"] [title*="/restored-root"]')
       expect(fetchCalls).toEqual(['agents.timeline'])
-      expect(container.textContent).toContain('/restored-root')
+      expect(rootTitle()).not.toBeNull()
       expect(container.textContent).not.toContain('/root · end')
 
       await act(async () => { await vi.advanceTimersByTimeAsync(1_100) })
 
       expect(fetchCalls).toEqual(['agents.timeline'])
-      expect(container.textContent).toContain('/restored-root')
+      expect(rootTitle()).not.toBeNull()
       expect(container.textContent).toContain(new Date(9_999).toLocaleTimeString())
       unmount()
     } finally {
@@ -392,7 +394,8 @@ describe('Run Dashboard view', () => {
 
     expect(container.querySelector('[data-run-dashboard-list]')).not.toBeNull()
     expect(container.querySelector('[data-timeline-scroller]')).toBeNull()
-    expect(container.textContent).toContain('/root/child')
+    // The full path rides the title tooltip; the row text keeps the leaf only.
+    expect(container.querySelector('[data-run-dashboard-row-id="child"] [title*="/root/child"]')).not.toBeNull()
     expect(container.textContent).toContain('活跃时长')
     expect(container.textContent).toContain('后台任务')
     expect(container.textContent).toContain('mobile job')
@@ -1017,19 +1020,21 @@ describe('Run Dashboard view', () => {
     )
     await act(async () => {})
 
+    // Shape channel: every row carries a per-state mark that survives
+    // greyscale and colour-blind rendering.
     const marks = [...container.querySelectorAll<HTMLElement>('[data-run-dashboard-row-id] [data-shape]')]
-    const badges = marks.map(mark => mark.parentElement as HTMLElement)
-    expect(badges).toHaveLength(2)
-    for (const [index, badge] of badges.entries()) {
-      const kind = badge.dataset.state
-      expect(kind).toBeTruthy()
-      // Shape channel: survives greyscale and colour-blind rendering.
-      expect(marks[index]?.dataset.shape).toBe(kind)
-      // Word channel: the exact state, always spelled out.
-      expect(badge.textContent?.trim().length).toBeGreaterThan(0)
-    }
-    expect(badges.map(badge => badge.dataset.state)).toEqual(['running', 'cold'])
-    expect(badges[1]?.textContent).toContain('已卸载')
+    expect(marks.map(mark => mark.dataset.shape)).toEqual(['running', 'cold'])
+    // Word channel: the active root spells its state beside the duration; the
+    // settled child keeps the word for readers and tooltips instead of the row.
+    const rootRow = container.querySelector('[data-run-dashboard-row-id="root"]') as HTMLElement
+    const childRow = container.querySelector('[data-run-dashboard-row-id="child"]') as HTMLElement
+    const rootStatus = rootRow.querySelector('[data-status-tier]') as HTMLElement
+    const childStatus = childRow.querySelector('[data-status-tier]') as HTMLElement
+    expect(rootStatus.dataset.statusTier).toBe('active')
+    expect(rootStatus.textContent).toContain('运行中')
+    expect(childStatus.dataset.statusTier).toBe('muted')
+    expect(childStatus.textContent).toContain('已卸载')
+    expect(childStatus.title).toContain('已卸载')
     unmount()
   })
 
@@ -1136,7 +1141,7 @@ describe('Run Dashboard view', () => {
     unmount()
   })
 
-  it('gives each row a labelled action group with the destructive pair set apart', async () => {
+  it('gives each row a labelled action group and only renders applicable controls', async () => {
     const list = makeList(baseSnapshot())
     const store = createSidebarStore()
     store.setSession('root')
@@ -1148,18 +1153,16 @@ describe('Run Dashboard view', () => {
     const child = container.querySelector('[data-run-dashboard-row-id="child"]') as HTMLElement
     const group = child.querySelector('[role="group"]') as HTMLElement
     expect(group.getAttribute('aria-label')).toBe('worker 的操作')
-    // The name never shares its line with a control.
-    const header = child.firstElementChild as HTMLElement
-    expect(header.textContent).toContain('worker')
-    expect(header.querySelector('button')).toBeNull()
-    // All four controls remain reachable at any width.
-    for (const label of ['打开聊天 worker', '查看详情 worker', '中断 worker', '关闭 worker']) {
+    // Open/details are always offered; a cold agent can never be interrupted,
+    // so no dead "中断" button is rendered — close (recoverable) remains.
+    for (const label of ['打开聊天 worker', '查看详情 worker', '关闭 worker']) {
       expect(container.querySelector(`button[aria-label="${label}"]`)).not.toBeNull()
     }
-    const interrupt = container.querySelector('button[aria-label="中断 worker"]') as HTMLElement
+    expect(container.querySelector('button[aria-label="中断 worker"]')).toBeNull()
+    // The destructive control sits apart from open/details in its own span.
     const close = container.querySelector('button[aria-label="关闭 worker"]') as HTMLElement
-    expect(interrupt.parentElement).toBe(close.parentElement)
-    expect(interrupt.parentElement).not.toBe(group)
+    expect(close.parentElement).not.toBe(group)
+    expect(group.contains(close)).toBe(true)
     unmount()
   })
 })

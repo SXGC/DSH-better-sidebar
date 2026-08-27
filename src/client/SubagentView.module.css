@@ -259,9 +259,51 @@
   gap: 4px;
 }
 
+/* The list card: the CARD indents (min 4 levels), a connector elbow ties it
+   to its parent, and the spark strip is the card's bottom edge — the card
+   itself reads as the timeline. Content keeps a flat left edge. */
 .runDashboardList .runDashboardRow {
-  border: 1px solid var(--dsw-alias-border-l2);
+  min-height: 0;
+  margin-left: calc(min(var(--run-depth, 0), 4) * 12px);
+  padding: 7px 10px 15px;
+  border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
+}
+
+.runDashboardList .runDashboardRow:hover {
+  border-color: var(--dsw-alias-border-l2);
+}
+
+/* The connector elbow replaces the in-card depth hairline. */
+.runDashboardList .runDashboardRow::before {
+  top: -5px;
+  bottom: 50%;
+  left: -8px;
+  width: 7px;
+  background: none;
+  border-left: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom-left-radius: 6px;
+}
+
+/* Root reads as root by weight, not by a fill that collides with the
+   located/selected highlight. */
+.runDashboardList .runDashboardRootRow {
+  background: transparent;
+}
+
+.runDashboardList .runDashboardRootRow .runDashboardRowTitle {
+  font-weight: 700;
+}
+
+.runDashboardList .runDashboardSpark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 5px;
+  margin: 0;
+  border-radius: 0 0 7px 7px;
 }
 
 .runDashboardTree {
@@ -385,36 +427,36 @@
   background: var(--dsw-alias-interactive-bg-active);
 }
 
+/* Flex (not block) so the bars' spacing cannot margin-collapse out of the
+   lane — collapsed margins used to push every lane 12px further down than
+   its tree row, drifting one full row over nine lanes. */
 .runDashboardLane {
   position: relative;
-}
-
-/* Line 1: status, name, duration. Nothing else competes here. */
-.runDashboardRowHeader {
   display: flex;
   align-items: center;
-  gap: 6px;
+}
+
+/* Line 1: mark, name, status/duration — and, on hover, the actions. The
+   wrap lets revealed buttons fall to their own line in a narrow row instead
+   of crushing the title. */
+.runDashboardRowHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 6px;
   min-width: 0;
 }
 
+/* The 48px floor keeps a name legible when the status text is wide: past
+   that the wrapping header moves the status to its own line instead. */
 .runDashboardRowTitle {
   flex: 1;
-  min-width: 0;
+  min-width: 48px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font: var(--dsw-font-xxs-strong-12);
   color: var(--dsw-alias-label-primary);
-}
-
-/* The one number the page is read for: fixed-width digits so a ticking
-   clock cannot reflow the title beside it. */
-.runDashboardRowDuration {
-  flex: none;
-  font: var(--dsw-font-xxxs-strong-11);
-  font-variant-numeric: tabular-nums;
-  color: var(--dsw-alias-label-secondary);
-  white-space: nowrap;
 }
 
 .runDashboardWarn {
@@ -472,88 +514,94 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* ── Status badge ──────────────────────────────────────────────────────
-   Three channels: the mark's SHAPE (severity), the WORD (exact state) and
-   a tint. Any one of them alone identifies an attention-worthy row, so a
-   colour-blind reader or a greyscale screenshot loses nothing. */
+/* ── Status mark + tiered word ─────────────────────────────────────────
+   Every state keeps a DISTINCT SHAPE (filled/dashed/hollow dot, check,
+   cross, pause, slash, dashed square), so a greyscale screenshot or a
+   colour-blind reader still tells them apart. The word rides the right-hand
+   status text: active/attention/error states always spell it; settled ones
+   keep only the duration and demote the word to tooltip + sr-only. */
 
-.runDashboardBadge {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 18px;
-  padding: 0 6px 0 5px;
-  border-radius: 999px;
-  background: var(--dsw-alias-interactive-bg-active);
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-xxxs-strong-11);
-  white-space: nowrap;
-}
-
-.runDashboardBadgeMark {
+.runDashboardMark {
   flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 10px;
-  height: 10px;
-  color: currentColor;
+  width: 12px;
+  height: 12px;
+  color: var(--dsw-alias-label-tertiary);
 }
 
-.runDashboardBadgeDot {
-  flex: none;
+.runDashboardMark[data-shape="running"],
+.runDashboardMark[data-shape="provisioning"] {
+  color: var(--dsw-alias-state-success-primary);
 }
 
-/* Severity shapes, drawn on the mark itself (the dot inside carries the
-   DSH colour semantics). */
-.runDashboardBadgeMark[data-shape="provisioning"],
-.runDashboardBadgeMark[data-shape="running"] {
-  border-radius: 999px;
-  box-shadow: 0 0 0 1px currentColor;
+.runDashboardMark[data-shape="waiting"],
+.runDashboardMark[data-shape="interrupted"] {
+  color: var(--dsw-alias-state-warn-primary);
 }
 
-.runDashboardBadgeMark[data-shape="waiting"],
-.runDashboardBadgeMark[data-shape="interrupted"] {
-  border-radius: 999px;
-  box-shadow: 0 0 0 2px currentColor;
-}
-
-.runDashboardBadgeMark[data-shape="errored"] {
-  transform: rotate(45deg);
-  box-shadow: 0 0 0 1px currentColor;
-}
-
-.runDashboardBadgeMark[data-shape="agent"],
-.runDashboardBadgeMark[data-shape="root"],
-.runDashboardBadgeMark[data-shape="diagnostic"] {
-  border: 1px dashed currentColor;
-  border-radius: 2px;
-}
-
-.runDashboardBadge[data-state="provisioning"],
-.runDashboardBadge[data-state="running"] {
-  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);
-  color: var(--dsw-alias-label-primary);
-}
-
-.runDashboardBadge[data-state="waiting"],
-.runDashboardBadge[data-state="interrupted"] {
-  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent);
-  color: var(--dsw-alias-state-warn-label);
-}
-
-.runDashboardBadge[data-state="errored"] {
-  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
+.runDashboardMark[data-shape="errored"] {
   color: var(--dsw-alias-state-error-primary);
 }
 
-.runDashboardBadge[data-state="cold"],
-.runDashboardBadge[data-state="closed"],
-.runDashboardBadge[data-state="diagnostic"] {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l2);
+.runDashboardMark[data-shape="completed"] {
+  color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 55%, var(--dsw-alias-label-tertiary));
+}
+
+.runDashboardMark[data-shape="running"]::before,
+.runDashboardMark[data-shape="waiting"]::before,
+.runDashboardMark[data-shape="idle"]::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+/* The one live-and-working state gets a glow so it pops in a long list. */
+.runDashboardMark[data-shape="running"]::before {
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
+}
+
+/* Coming into being: a dashed, not-yet-solid ring. */
+.runDashboardMark[data-shape="provisioning"]::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1.5px dashed currentColor;
+}
+
+/* Unloaded but recoverable: hollow — the seat is kept warm. */
+.runDashboardMark[data-shape="cold"]::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1.5px solid currentColor;
+}
+
+.runDashboardRowStatus {
+  flex: none;
+  font: var(--dsw-font-xxxs-strong-11);
+  font-variant-numeric: tabular-nums;
   color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+.runDashboardRowStatus[data-status-tier="active"] {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.runDashboardRowStatus[data-status-tier="attention"] {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.runDashboardRowStatus[data-status-tier="error"] {
+  color: var(--dsw-alias-state-error-primary);
 }
 
 /* ── Gantt bars ────────────────────────────────────────────────────────
@@ -576,8 +624,24 @@
 }
 
 .runDashboardLaneBars {
+  flex: 1;
   height: 14px;
-  margin: 12px 8px;
+  margin: 0 8px;
+}
+
+/* The existence band: a faint underlay from the agent's declaration to its
+   last known activity, so an empty stretch of track reads as "not born yet /
+   already gone", never as "no data". */
+.runDashboardBand {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 12%, transparent);
+}
+
+/* At spark scale the between-segment hairline is pure noise. */
+.runDashboardSpark .runDashboardSegment {
+  box-shadow: none;
 }
 
 .runDashboardSegment {
@@ -665,22 +729,44 @@
 }
 
 /* ── Row actions ──────────────────────────────────────────────────────
-   Their own line, never sharing one with the name. Quiet by default; the
-   destructive pair sits apart on the right and only warms up on hover. */
+   Collapsed to zero size until the row is CLICKED (data-actions-open) or
+   holds focus, so a resting row is just mark + name + status. Zero-size
+   (not display:none) keeps every button in the tab order: tabbing into one
+   triggers :focus-within and reveals the group. Clicking the row again, or
+   another row, collapses it. */
+
+.runDashboardClickableRow {
+  cursor: pointer;
+}
 
 .runDashboardActions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  padding-top: 2px;
+  max-width: 0;
+  /* Height must collapse too: zero-width wrap would stack the hidden
+     buttons vertically and silently inflate the row. */
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  cursor: default;
 }
 
+.runDashboardRow[data-actions-open] .runDashboardActions,
+.runDashboardRow:focus-within .runDashboardActions {
+  max-width: none;
+  max-height: none;
+  opacity: 1;
+  overflow: visible;
+}
+
+/* The destructive pair sits apart from open/details. */
 .runDashboardActionsDanger {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-left: auto;
+  margin-left: 6px;
 }
 
 .runDashboardActionButton {
@@ -744,12 +830,20 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
-/* ── Agent detail panel ────────────────────────────────────────────── */
+/* ── Agent detail panel ────────────────────────────────────────────────
+   A sticky bottom dock, same interaction as the job output pane (they share
+   the dock: opening one closes the other). The list scrolls above it, so
+   "查看详情" always lands in view — never below the fold. */
 
 .runDashboardDetail {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   margin-top: 8px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
+  background: var(--dsw-alias-bg-base);
+  box-shadow: 0 -6px 12px -8px rgba(0, 0, 0, 0.35);
   overflow: hidden;
 }
 
@@ -864,8 +958,8 @@
   overflow-wrap: anywhere;
 }
 
-/* A touch device has no hover to reveal anything with, and its taps need
-   room: keep every control at a comfortable size there. */
+/* Click-to-reveal works the same on touch (a tap toggles the row); just
+   keep every control at a comfortable tap size there. */
 @media (hover: none) {
   .runDashboardActionButton {
     height: 28px;

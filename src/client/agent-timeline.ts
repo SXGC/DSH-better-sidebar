@@ -105,6 +105,41 @@ export function agentStateKind(state: AgentState): string {
   return state.residency === 'live' ? state.turn.kind : state.residency
 }
 
+/**
+ * Display-level pass over a row's raw segments: merge adjacent same-kind
+ * segments, absorb slivers shorter than `minFraction` of the range into their
+ * left neighbour, and cap a trailing open `cold` span to a short stub so an
+ * unloaded agent reads as "ended here", not as a texture running to the right
+ * edge. Errored slivers are never absorbed — a brief failure is still signal.
+ * The raw segments stay untouched: durations and tooltips keep exact values.
+ */
+export function displaySegments(
+  segments: readonly TimelineSegment[],
+  range: TimelineDisplay['range'],
+  now: number,
+  minFraction: number,
+): TimelineSegment[] {
+  if (range === null || segments.length === 0) return [...segments]
+  const minMs = Math.max(1, (range.end - range.start) * minFraction)
+  type Working = TimelineSegment & { kind: string }
+  const merged: Working[] = []
+  for (const segment of segments) {
+    const kind = agentStateKind(segment.state)
+    const end = segment.end === undefined && segment.state.residency === 'cold'
+      ? Math.min(now, segment.start + minMs)
+      : segment.end
+    const prev = merged[merged.length - 1]
+    const sliver = (end ?? now) - segment.start < minMs && kind !== 'errored'
+    if (prev !== undefined && (prev.kind === kind || sliver)) {
+      if (end === undefined) delete prev.end
+      else if (prev.end !== undefined) prev.end = Math.max(prev.end, end)
+      continue
+    }
+    merged.push({ start: segment.start, ...(end === undefined ? {} : { end }), state: segment.state, kind })
+  }
+  return merged.map(({ kind: _kind, ...segment }) => segment)
+}
+
 /** The state-dot semantics of an agent state, mirroring the job dot colors. */
 export function agentDotState(state: AgentState | undefined): 'ongoing' | 'warning' | 'done' | 'error' | undefined {
   if (state === undefined) return undefined
