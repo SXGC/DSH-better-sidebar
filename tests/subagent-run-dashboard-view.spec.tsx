@@ -411,12 +411,13 @@ describe('Run Dashboard view', () => {
     const store = createSidebarStore()
     store.setSession('root')
     const openChild = vi.fn()
+    const openSubagent = vi.fn()
     const interruptSubagent = vi.fn(async () => 'accepted' as const)
     const { container, unmount } = mount(
       createElement(SubagentView, {
         sessionId: 'root',
         active: true,
-        ctx: makeCtx(list, () => {}, { interruptSubagent } as Partial<Context['sessions']>),
+        ctx: makeCtx(list, () => {}, { interruptSubagent, openSubagent } as Partial<Context['sessions']>),
         store,
         onOpenChild: openChild,
       }),
@@ -434,6 +435,13 @@ describe('Run Dashboard view', () => {
       ;(container.querySelector('button[aria-label="打开聊天 worker"]') as HTMLButtonElement).click()
     })
     expect(openChild).toHaveBeenCalledWith({
+      parentSessionId: 'root',
+      childSessionId: 'child',
+      mode: 'continuable',
+    })
+    // The shell hook only ARMS the jump-back; the official switch must still
+    // fire or the button is a no-op.
+    expect(openSubagent).toHaveBeenCalledWith({
       parentSessionId: 'root',
       childSessionId: 'child',
       mode: 'continuable',

@@ -1473,8 +1473,17 @@ export function SubagentView(props: {
   const openAgent = useCallback((row: TimelineDisplayRow): void => {
     const address = agentAddress(row)
     if (address === undefined) return
+    // Notify the shell FIRST (it arms the jump-back so the Run Dashboard
+    // re-opens on top of the child's own layout), then perform the actual
+    // conversation switch. The hook only records intent — it never opens the
+    // child itself, so `openSubagent` must run in BOTH cases or the button
+    // does nothing.
     onOpenChild?.(address)
-    if (onOpenChild === undefined) ctx.sessions.openSubagent?.(address)
+    try {
+      ctx.sessions.openSubagent?.(address)
+    } catch (error) {
+      console.warn('[dsh-better-sidebar] openSubagent failed:', error)
+    }
   }, [ctx.sessions, onOpenChild])
 
   const runAgentControl = useCallback(async (
