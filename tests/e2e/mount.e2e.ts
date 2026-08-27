@@ -15,7 +15,7 @@
  *     fail() strips, no `pageerror`, no plugin-prefixed console errors);
  *  4. opens the official fourth track from the Host-owned layout action,
  *     proves `shell.overlay` contains only the free-window layer, sweeps every
- *     built-in tab (Files / Source Control / Tasks / Terminal / Browser) —
+ *     built-in tab (Files / Source Control / Run Dashboard / Terminal / Browser) —
  *     including the lazily-fetched terminal chunk — and then opens seeded
  *     files through the Files window's tree (separate mode: each file opens
  *     its own new tab, the seeded home "Files" tab stays the explorer),
@@ -62,7 +62,7 @@ const SEEDED_README_FILE = 'readme-style.md'
 const CRASH_STRIP_PATTERNS = [/^dsh-better-sidebar:/, /^\[dsh-better-sidebar\]/]
 
 /** Built-in tab titles the sweep drives (en-US copy; follows DSH locale). */
-const BUILTIN_TABS = ['Files', 'Source Control', 'Tasks', 'Side Chat (beta)', 'Terminal', 'Browser']
+const BUILTIN_TABS = ['Files', 'Source Control', 'Run Dashboard', 'Side Chat (beta)', 'Terminal', 'Browser']
 
 /** Deterministic Side Chat transcript used only by the visual parity fixture. */
 const SIDECHAT_VISUAL_EVENTS = [

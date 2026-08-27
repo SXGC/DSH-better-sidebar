@@ -81,6 +81,12 @@ describe('built-in tab registrations', () => {
     const { service } = setup()
     const toggles = service.getTab('subagent')?.settings?.toggles ?? []
     expect(toggles.map(t => t.key)).toEqual(['autoOpenSubagent', 'autoOpenJobs'])
+    const pluginToggles = service.getTab('subagent')?.settings?.pluginToggles ?? []
+    expect(pluginToggles.map(t => t.key)).toEqual(['longRunningMinutes'])
+    expect(pluginToggles[0]?.type).toBe('number')
+    expect(pluginToggles[0]?.min).toBe(0)
+    expect(pluginToggles[0]?.max).toBe(10080)
+    expect(pluginToggles[0]?.unit).toBe('min')
   })
 
   it('the editor tab declares its merged-mode (embedded file tree) setting', () => {

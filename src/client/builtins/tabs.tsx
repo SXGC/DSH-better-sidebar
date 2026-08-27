@@ -165,11 +165,21 @@ export function builtinTabs(ctx: Context, options: BuiltinTabOptions = {}): read
           title: () => t('settingsJobsTitle'),
           desc: () => t('settingsJobsDesc'),
         }],
+        pluginToggles: [{
+          key: 'longRunningMinutes',
+          type: 'number',
+          title: () => t('settingsLongRunningMinutesTitle'),
+          desc: () => t('settingsLongRunningMinutesDesc'),
+          min: 0,
+          max: 10_080,
+          unit: 'min',
+        }],
       },
-      component: ({ ctx, scope, visible, onSubagentJump }) => (
+      component: ({ ctx, store, scope, visible, onSubagentJump }) => (
         <SubagentView
           sessionId={scope.sessionId}
           ctx={ctx}
+          store={store}
           active={visible}
           onOpenChild={(address) => { onSubagentJump?.(address.childSessionId) }}
         />

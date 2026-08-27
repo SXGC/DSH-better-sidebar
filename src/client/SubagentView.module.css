@@ -59,176 +59,6 @@
   padding: 2px 6px 8px;
 }
 
-/* One node card: state dot + label + secondary + (running) live lines. */
-.subagentRow {
-  position: relative;
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 50px;
-  padding: 7px 8px 7px 11px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  font: var(--dsw-font-s-14);
-  color: var(--dsw-alias-label-primary);
-  text-align: left;
-  cursor: pointer;
-  outline: none;
-}
-
-.subagentRow:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-/* Keyboard focus (mirror of the official catalog row): a visible fill only
-   when focused via keyboard; the selected state below still wins on top. */
-.subagentRow:focus-visible {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-/* The currently-open session, highlighted in place (mirror of the workspace
-   `.sessionRow.selected` — declared after the hover/focus rules so it wins). */
-.subagentRowActive,
-.subagentRowActive:hover,
-.subagentRowActive:focus-visible {
-  background: var(--dsw-alias-interactive-bg-active);
-}
-
-.subagentRowDisabled {
-  color: var(--dsw-alias-label-dimmed);
-  cursor: not-allowed;
-}
-
-.subagentRowDisabled:hover {
-  background: transparent;
-}
-
-/* Loading placeholders are disabled but keep the default cursor (official
-   `.loadingRow` distinction from `.disabled`). */
-.subagentRowLoading {
-  cursor: default;
-}
-
-/* The state dot aligns to the first text line (official catalog detail). */
-.subagentDot {
-  margin-top: 4px;
-}
-
-.subagentContent {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  gap: 2px;
-}
-
-.subagentLabel,
-.subagentSecondary {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.subagentLabel {
-  color: inherit;
-  font-weight: 400;
-}
-
-.subagentSecondary {
-  font: var(--dsw-font-xxxs-11);
-  color: var(--dsw-alias-label-tertiary);
-}
-
-/* ── Live lines (running cards only) ──────────────────────────────────── */
-
-.subagentLive {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-  min-width: 0;
-  font: var(--dsw-font-xxxs-11);
-  color: var(--dsw-alias-label-tertiary);
-  overflow: hidden;
-}
-
-.subagentLiveTool {
-  flex: none;
-  font: var(--dsw-font-xxxs-strong-11);
-  color: var(--dsw-alias-label-secondary);
-}
-
-.subagentLiveArgs {
-  min-width: 0;
-  font-family: var(--ds-font-family-code);
-  font-size: var(--dsw-font-xxxs-11-font-size);
-  line-height: var(--dsw-font-xxxs-11-line-height);
-  color: var(--dsw-alias-label-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.subagentLiveText {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  font: var(--dsw-font-xxxs-11);
-  color: var(--dsw-alias-label-secondary);
-}
-
-/* ── Tree connector lines (official catalog recipe) ────────────────────── */
-
-.subagentNode {
-  position: relative;
-  min-width: 0;
-}
-
-.subagentChildren {
-  position: relative;
-  margin-left: 18px;
-  padding-left: 4px;
-}
-
-.subagentChildren::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: -26px;
-  height: 26px;
-  border-left: 1px solid var(--dsw-alias-border-l2);
-}
-
-.subagentChildren[aria-busy='true']::before {
-  content: none;
-}
-
-.subagentChildren > .subagentNode::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -4px;
-  border-left: 1px solid var(--dsw-alias-border-l2);
-}
-
-.subagentChildren > .subagentNode:last-child::before {
-  bottom: auto;
-  height: 17px;
-}
-
-.subagentChildren > .subagentNode > .subagentRow::before {
-  content: '';
-  position: absolute;
-  top: 16px;
-  left: -4px;
-  width: 14px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
-}
-
 .subagentEmpty {
   display: flex;
   flex-direction: column;
@@ -273,6 +103,874 @@
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
 }
+
+/* ── Run Dashboard tree-gantt ─────────────────────────────────────────── */
+
+/* Viewport controls: only mounted next to a real gantt canvas. */
+.runDashboardToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 0 2px 6px;
+}
+
+.runDashboardToolbar button {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+  cursor: pointer;
+}
+
+.runDashboardToolbar button:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* ── Filters ───────────────────────────────────────────────────────────
+   Free text + status always fit one line; the rest lives in a disclosure.
+   Five side-by-side fields become 55px stubs in a 360px sidebar, which is
+   worse than two usable fields plus a labelled "more" affordance. */
+
+.runDashboardFilters {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 2px 6px;
+}
+
+.runDashboardFilterRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(84px, 116px);
+  gap: 4px;
+}
+
+.runDashboardFilters select,
+.runDashboardFilters input:not([type="checkbox"]) {
+  min-width: 0;
+  height: 26px;
+  box-sizing: border-box;
+  padding: 0 7px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-11);
+}
+
+.runDashboardFilters select:focus-visible,
+.runDashboardFilters input:focus-visible {
+  outline: none;
+  border-color: var(--dsw-alias-border-l4);
+}
+
+.runDashboardFilterSearch {
+  width: 100%;
+}
+
+.runDashboardFilterSummary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxxs-strong-11);
+  cursor: pointer;
+  list-style: none;
+}
+
+.runDashboardFilterSummary::-webkit-details-marker {
+  display: none;
+}
+
+/* A CSS-drawn chevron: no icon import, and it rotates with [open]. */
+.runDashboardFilterSummary::before {
+  content: '';
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.runDashboardFilterMore[open] .runDashboardFilterSummary::before {
+  transform: rotate(45deg);
+}
+
+.runDashboardFilterSummary:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* "N active": the only cue that rows are missing because of a collapsed
+   filter, so it stays visible while the disclosure is shut. */
+.runDashboardFilterBadge {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+  line-height: 16px;
+}
+
+.runDashboardFilterGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px;
+  padding: 4px 0 2px;
+}
+
+.runDashboardCheck {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  white-space: nowrap;
+}
+
+/* ── Layouts ───────────────────────────────────────────────────────────
+   Two shapes for the same rows: a split tree + shared canvas once the
+   panel can afford both, and a single card list below that. */
+
+.runDashboardGrid {
+  display: grid;
+  grid-template-columns: auto 6px minmax(0, 1fr);
+  min-height: 0;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.runDashboardList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* The list card: the CARD indents (min 4 levels), a connector elbow ties it
+   to its parent, and the spark strip is the card's bottom edge — the card
+   itself reads as the timeline. Content keeps a flat left edge. */
+.runDashboardList .runDashboardRow {
+  min-height: 0;
+  margin-left: calc(min(var(--run-depth, 0), 4) * 12px);
+  padding: 7px 10px 15px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+}
+
+.runDashboardList .runDashboardRow:hover {
+  border-color: var(--dsw-alias-border-l2);
+}
+
+/* The connector elbow replaces the in-card depth hairline. */
+.runDashboardList .runDashboardRow::before {
+  top: -5px;
+  bottom: 50%;
+  left: -8px;
+  width: 7px;
+  background: none;
+  border-left: 1px solid var(--dsw-alias-border-l2);
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-bottom-left-radius: 6px;
+}
+
+/* Root reads as root by weight, not by a fill that collides with the
+   located/selected highlight. */
+.runDashboardList .runDashboardRootRow {
+  background: transparent;
+}
+
+.runDashboardList .runDashboardRootRow .runDashboardRowTitle {
+  font-weight: 700;
+}
+
+.runDashboardList .runDashboardSpark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 5px;
+  margin: 0;
+  border-radius: 0 0 7px 7px;
+}
+
+.runDashboardTree {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 128px;
+  background: var(--dsw-alias-bg-base);
+  border-right: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* Pads the tree column down by exactly one axis strip, so lane N lines up
+   with row N instead of sitting 24px high. */
+.runDashboardTreeHead {
+  height: 24px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.runDashboardSplitter {
+  width: 6px;
+  background: var(--dsw-alias-bg-base);
+  cursor: col-resize;
+  outline: none;
+}
+
+.runDashboardSplitter:hover,
+.runDashboardSplitter:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.runDashboardTimeline {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.runDashboardCanvas {
+  position: relative;
+  min-width: 100%;
+}
+
+/* The axis. Stamps are positioned by their tick ratio, so they must not be
+   laid out by the flow — `left` only bites on a positioned child. */
+.runDashboardScale {
+  position: relative;
+  height: 24px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  font: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.runDashboardTick {
+  position: absolute;
+  top: 5px;
+  transform: translateX(-50%);
+  padding: 0 4px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.runDashboardLanes {
+  position: relative;
+}
+
+.runDashboardGridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--dsw-alias-border-l1);
+  opacity: 0.6;
+}
+
+/* ── Rows ─────────────────────────────────────────────────────────────── */
+
+.runDashboardRow,
+.runDashboardLane {
+  min-height: 64px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* Depth reads as indent + a connector hairline, capped at 4 levels so a
+   deep tree can never squeeze the title out of a 360px sidebar. */
+.runDashboardRow {
+  --run-indent: calc(min(var(--run-depth, 0), 4) * 11px);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 8px 8px calc(8px + var(--run-indent));
+}
+
+.runDashboardRow::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(2px + var(--run-indent));
+  width: 1px;
+  background: var(--dsw-alias-border-l2);
+}
+
+.runDashboardRootRow {
+  background: var(--dsw-alias-interactive-bg-active);
+}
+
+/* Depth 0 has nothing to connect to. */
+.runDashboardRootRow::before {
+  content: none;
+}
+
+.runDashboardContextRow {
+  opacity: 0.68;
+}
+
+.runDashboardOwnerLocated {
+  box-shadow: inset 3px 0 0 var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-interactive-bg-active);
+}
+
+/* Flex (not block) so the bars' spacing cannot margin-collapse out of the
+   lane — collapsed margins used to push every lane 12px further down than
+   its tree row, drifting one full row over nine lanes. */
+.runDashboardLane {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* Line 1: mark, name, status/duration — and, on hover, the actions. The
+   wrap lets revealed buttons fall to their own line in a narrow row instead
+   of crushing the title. */
+.runDashboardRowHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 6px;
+  min-width: 0;
+}
+
+/* The 48px floor keeps a name legible when the status text is wide: past
+   that the wrapping header moves the status to its own line instead. */
+.runDashboardRowTitle {
+  flex: 1;
+  min-width: 48px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--dsw-font-xxs-strong-12);
+  color: var(--dsw-alias-label-primary);
+}
+
+.runDashboardWarn {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+  font: var(--dsw-font-xxxs-strong-11);
+}
+
+/* Line 3: context. Muted, single line, full text on hover. */
+.runDashboardRowMeta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.runDashboardMeta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--dsw-font-xxxs-11);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Raw clock/wall/segment figures: always in the accessibility tree and in
+   the row's tooltip, but only spelled out where the column is wide enough
+   to carry them without crowding the duration. */
+.runDashboardRowSpan,
+.runDashboardSrOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.runDashboardGrid .runDashboardRowSpan {
+  position: static;
+  flex: none;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: hidden;
+  clip-path: none;
+  text-overflow: ellipsis;
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ── Status mark + tiered word ─────────────────────────────────────────
+   Every state keeps a DISTINCT SHAPE (filled/dashed/hollow dot, check,
+   cross, pause, slash, dashed square), so a greyscale screenshot or a
+   colour-blind reader still tells them apart. The word rides the right-hand
+   status text: active/attention/error states always spell it; settled ones
+   keep only the duration and demote the word to tooltip + sr-only. */
+
+.runDashboardMark {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.runDashboardMark[data-shape="running"],
+.runDashboardMark[data-shape="provisioning"] {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.runDashboardMark[data-shape="waiting"],
+.runDashboardMark[data-shape="interrupted"] {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.runDashboardMark[data-shape="errored"] {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.runDashboardMark[data-shape="completed"] {
+  color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 55%, var(--dsw-alias-label-tertiary));
+}
+
+.runDashboardMark[data-shape="running"]::before,
+.runDashboardMark[data-shape="waiting"]::before,
+.runDashboardMark[data-shape="idle"]::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+/* The one live-and-working state gets a glow so it pops in a long list. */
+.runDashboardMark[data-shape="running"]::before {
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
+}
+
+/* Coming into being: a dashed, not-yet-solid ring. */
+.runDashboardMark[data-shape="provisioning"]::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1.5px dashed currentColor;
+}
+
+/* Unloaded but recoverable: hollow — the seat is kept warm. */
+.runDashboardMark[data-shape="cold"]::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1.5px solid currentColor;
+}
+
+.runDashboardRowStatus {
+  flex: none;
+  font: var(--dsw-font-xxxs-strong-11);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+.runDashboardRowStatus[data-status-tier="active"] {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.runDashboardRowStatus[data-status-tier="attention"] {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.runDashboardRowStatus[data-status-tier="error"] {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* ── Gantt bars ────────────────────────────────────────────────────────
+   One continuous track per row, not a row of pills: segments are flush
+   fills clipped by the track, separated by a hairline, so two rows' spans
+   stay comparable and a 3px slice still reads as part of one run. */
+
+.runDashboardSpark,
+.runDashboardLaneBars {
+  position: relative;
+  display: block;
+  border-radius: 3px;
+  background: var(--dsw-alias-bg-subtle);
+  overflow: hidden;
+}
+
+.runDashboardSpark {
+  height: 6px;
+  margin: 1px 0 2px;
+}
+
+.runDashboardLaneBars {
+  flex: 1;
+  height: 14px;
+  margin: 0 8px;
+}
+
+/* The existence band: a faint underlay from the agent's declaration to its
+   last known activity, so an empty stretch of track reads as "not born yet /
+   already gone", never as "no data". */
+.runDashboardBand {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 12%, transparent);
+}
+
+/* At spark scale the between-segment hairline is pure noise. */
+.runDashboardSpark .runDashboardSegment {
+  box-shadow: none;
+}
+
+.runDashboardSegment {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: block;
+  min-width: 2px;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding: 0 5px;
+  box-shadow: inset -1px 0 0 var(--dsw-alias-bg-base);
+  background-color: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxxs-strong-11);
+  line-height: 14px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* An open-ended span has no right edge to draw: fade it into the track so
+   "still running" never reads as "finished here". */
+.runDashboardSegment[data-segment-open="true"] {
+  box-shadow: none;
+  mask-image: linear-gradient(to right, rgb(0 0 0) 65%, rgb(0 0 0 / 25%));
+}
+
+/* Fill = colour + weave. The weave is what survives greyscale. */
+.runDashboardSegment[data-segment-state="running"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 26%, transparent);
+}
+
+.runDashboardSegment[data-segment-state="provisioning"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--dsw-alias-state-success-primary) 34%, transparent) 0 2px,
+    transparent 2px 6px
+  );
+}
+
+.runDashboardSegment[data-segment-state="waiting"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent);
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--dsw-alias-state-warn-primary) 40%, transparent) 0 2px,
+    transparent 2px 4px
+  );
+}
+
+.runDashboardSegment[data-segment-state="interrupted"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+  background-image: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--dsw-alias-state-warn-primary) 38%, transparent) 0 1px,
+    transparent 1px 4px
+  );
+}
+
+.runDashboardSegment[data-segment-state="errored"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
+  background-image:
+    repeating-linear-gradient(45deg, color-mix(in srgb, var(--dsw-alias-state-error-primary) 34%, transparent) 0 1px, transparent 1px 4px),
+    repeating-linear-gradient(-45deg, color-mix(in srgb, var(--dsw-alias-state-error-primary) 34%, transparent) 0 1px, transparent 1px 4px);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.runDashboardSegment[data-segment-state="idle"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-label-secondary) 10%, transparent);
+}
+
+.runDashboardSegment[data-segment-state="completed"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-label-secondary) 16%, transparent);
+}
+
+.runDashboardSegment[data-segment-state="cold"],
+.runDashboardSegment[data-segment-state="closed"] {
+  background-color: color-mix(in srgb, var(--dsw-alias-label-tertiary) 8%, transparent);
+  background-image: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--dsw-alias-label-tertiary) 34%, transparent) 0 1px,
+    transparent 1px 5px
+  );
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* ── Row actions ──────────────────────────────────────────────────────
+   Collapsed to zero size until the row is CLICKED (data-actions-open) or
+   holds focus, so a resting row is just mark + name + status. Zero-size
+   (not display:none) keeps every button in the tab order: tabbing into one
+   triggers :focus-within and reveals the group. Clicking the row again, or
+   another row, collapses it. */
+
+.runDashboardClickableRow {
+  cursor: pointer;
+}
+
+.runDashboardActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  max-width: 0;
+  /* Height must collapse too: zero-width wrap would stack the hidden
+     buttons vertically and silently inflate the row. */
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  cursor: default;
+}
+
+.runDashboardRow[data-actions-open] .runDashboardActions,
+.runDashboardRow:focus-within .runDashboardActions {
+  max-width: none;
+  max-height: none;
+  opacity: 1;
+  overflow: visible;
+}
+
+/* The destructive pair sits apart from open/details. */
+.runDashboardActionsDanger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+}
+
+.runDashboardActionButton {
+  flex: none;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxxs-strong-11);
+  cursor: pointer;
+}
+
+.runDashboardActionButton:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.runDashboardActionButton:focus-visible {
+  outline: none;
+  border-color: var(--dsw-alias-border-l4);
+}
+
+.runDashboardActionButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.runDashboardActionPrimary {
+  border-color: var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.runDashboardActionActive {
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-primary);
+}
+
+.runDashboardActionsDanger .runDashboardActionButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.runDashboardDangerButton,
+.runDashboardDangerButton:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, var(--dsw-alias-border-l2));
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.runDashboardControlResult {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--dsw-font-xxxs-strong-11);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.runDashboardControlError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* ── Agent detail panel ────────────────────────────────────────────────
+   A sticky bottom dock, same interaction as the job output pane (they share
+   the dock: opening one closes the other). The list scrolls above it, so
+   "查看详情" always lands in view — never below the fold. */
+
+.runDashboardDetail {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-top: 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-base);
+  box-shadow: 0 -6px 12px -8px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.runDashboardDetailHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+}
+
+.runDashboardDetailHeader span {
+  flex: 1;
+  min-width: 0;
+}
+
+.runDashboardDetailClose {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.runDashboardDetailClose:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.runDashboardDetailSection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.runDashboardDetailSection:last-child {
+  border-bottom: none;
+}
+
+.runDashboardDetailLabel {
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+}
+
+.runDashboardDetailHint,
+.runDashboardDetailError {
+  padding: 8px;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+}
+
+.runDashboardDetailError {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.runDashboardDetailError button {
+  flex: none;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+  cursor: pointer;
+}
+
+.runDashboardTask {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-subtle);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxs-12);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.runDashboardProps {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 0;
+  font: var(--dsw-font-xxxs-11);
+}
+
+.runDashboardProps dt {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.runDashboardProps dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  overflow-wrap: anywhere;
+}
+
+/* Click-to-reveal works the same on touch (a tap toggles the row); just
+   keep every control at a comfortable tap size there. */
+@media (hover: none) {
+  .runDashboardActionButton {
+    height: 28px;
+    padding: 0 10px;
+  }
+
+  .runDashboardFilterSummary {
+    height: 28px;
+  }
+}
+
 
 /* ── Background-job section (below the topology tree) ────────────────── */
 
@@ -411,6 +1109,39 @@
   white-space: nowrap;
   font: var(--dsw-font-xxxs-11);
   color: var(--dsw-alias-label-tertiary);
+}
+
+.jobsOwner,
+.jobsOwnerUnlinked {
+  flex: none;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 2px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font: var(--dsw-font-xxxs-strong-11);
+  line-height: 20px;
+}
+
+.jobsOwner {
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.jobsOwner:hover,
+.jobsOwner:focus-visible,
+.jobsOwnerActive {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.jobsOwnerUnlinked {
+  color: var(--dsw-alias-label-tertiary);
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .jobsKill {

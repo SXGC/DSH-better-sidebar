@@ -63,6 +63,7 @@ jobs:
     # into the DSH composition (same guard DSH's own CI uses).
     env:
       DSH_TELEMETRY_DISABLED: '1'
+      DSH_CLI_SPEC: ${{ vars.DSH_CLI_SPEC }}
     steps:
       - uses: actions/checkout@v7
 
@@ -79,10 +80,17 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Pin the DSH CLI the lane mounts into; the profile's bundle stack
-      # (dsh-base / dsh-web-app) resolves from this installation. Keep in
-      # step with the plugin's @deepseek-ai/* peer range when bumping.
-      - name: Install dsh CLI (pinned)
-        run: npm install -g @deepseek-ai/dsh@0.1.1-rc.2
+      # (dsh-base / dsh-web-app) resolves from this installation. Run
+      # Dashboard requires the first formal DSH release that contains
+      # 5cf09d3a0a; do not fall back to rc.8 / rc.2 here.
+      - name: Install dsh CLI (formal baseline)
+        run: |
+          if [ -z "${DSH_CLI_SPEC:-}" ]; then
+            echo "DSH_CLI_SPEC must name the first formal @deepseek-ai/dsh release containing 5cf09d3a0a."
+            echo "Until that package is published, the real mount lane is intentionally blocked."
+            exit 1
+          fi
+          npm install -g "@deepseek-ai/dsh@${DSH_CLI_SPEC}"
 
       # lib/ is gitignored; the tarball is produced from this build.
       - name: Build and pack the npm tarball

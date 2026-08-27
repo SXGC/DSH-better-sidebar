@@ -112,6 +112,8 @@ export interface SidebarState {
   bottomSplits: SplitNode
   /** Free windows (tabs dragged out onto the conversation area). */
   floats: FloatWindow[]
+  /** Run Dashboard tree column width in px, persisted per session. */
+  runDashboardTreeWidth: number
 }
 
 export const PANEL_MIN = 280
@@ -132,6 +134,7 @@ export const FLOAT_MIN_H = 200
  *  not overflowing — window instead of an exact ratio. */
 export const FLOAT_DEFAULT_W = 390
 export const FLOAT_DEFAULT_H = 780
+export const RUN_DASHBOARD_TREE_MIN = 128
 
 let nextIdCounter = 0
 /** Unique pane/tab id within one state instance. */
@@ -226,7 +229,17 @@ export function makeDefaultState(width = PANEL_DEFAULT, panelOpen = true, seed: 
     bottomOpenedOnce: false,
     bottomSplits: bottomLeaf,
     floats: [],
+    runDashboardTreeWidth: defaultRunDashboardTreeWidth(width),
   }
+}
+
+export function defaultRunDashboardTreeWidth(panelWidth: number): number {
+  return clampRunDashboardTreeWidth(panelWidth * 0.45, panelWidth)
+}
+
+export function clampRunDashboardTreeWidth(width: number, panelWidth: number): number {
+  const max = Math.max(RUN_DASHBOARD_TREE_MIN, Math.round(panelWidth) - RUN_DASHBOARD_TREE_MIN)
+  return Math.min(max, Math.max(RUN_DASHBOARD_TREE_MIN, Math.round(width)))
 }
 
 /** Whether a tree node (or any descendant) carries the given pane/split id. */
@@ -1188,9 +1201,10 @@ export function sanitizeState(parsed: unknown): SidebarState | undefined {
       ? requestedActivePane
       : firstLeaf(splits).id
   const maxWidth = typeof window !== 'undefined' ? window.innerWidth : Infinity
+  const width = Math.max(PANEL_MIN, Math.min(record.width, maxWidth))
   return {
     panelOpen: record.panelOpen,
-    width: Math.max(PANEL_MIN, Math.min(record.width, maxWidth)),
+    width,
     // A stale duplicate pane id may have been re-ided; follow the rename so
     // new tabs still land in the pane the user was using.
     activePane,
@@ -1207,6 +1221,12 @@ export function sanitizeState(parsed: unknown): SidebarState | undefined {
     bottomOpenedOnce: record.bottomOpenedOnce === true,
     bottomSplits,
     floats,
+    runDashboardTreeWidth: clampRunDashboardTreeWidth(
+      typeof record.runDashboardTreeWidth === 'number' && Number.isFinite(record.runDashboardTreeWidth)
+        ? record.runDashboardTreeWidth
+        : defaultRunDashboardTreeWidth(width),
+      width,
+    ),
   }
 }
 

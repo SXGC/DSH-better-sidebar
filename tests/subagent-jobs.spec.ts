@@ -6,20 +6,21 @@ import { describe, expect, it } from 'vitest'
 import {
   collectTreeJobs,
   detectNewJob,
-  formatJobDuration,
   isJobLive,
   orderJobs,
+  resolveJobOwner,
   jobDotState,
   jobStatusLabel,
   treeSessionIds,
 } from '../src/client/subagent-jobs.ts'
+import { formatDuration } from '../src/client/agent-timeline.ts'
 import type { SidebarSessionList, SidebarSessionSummary, SidebarJobStatus, SidebarJobView } from '../src/context-types.ts'
 
 /** The translator stub: renders duration templates like the real locale copy. */
 const templates: Record<string, string> = {
-  jobDurationSeconds: '{seconds}秒',
-  jobDurationMinutes: '{minutes}分{seconds}秒',
-  jobDurationHours: '{hours}小时{minutes}分',
+  durationSeconds: '{seconds}秒',
+  durationMinutes: '{minutes}分{seconds}秒',
+  durationHours: '{hours}小时{minutes}分',
 }
 const t = (key: string, params?: Record<string, string | number>): string => {
   let text = templates[key] ?? key
@@ -84,6 +85,35 @@ describe('collectTreeJobs', () => {
   })
 })
 
+describe('resolveJobOwner', () => {
+  it('links a job owner only when that owner is present in the current display rows', () => {
+    const row = {
+      ownerSessionId: 'child',
+      ownerTitle: 'title-child',
+      job: job('bash-1'),
+    }
+
+    expect(resolveJobOwner(row, [
+      { id: 'root', title: 'Root row' },
+      { id: 'child', title: 'Worker row' },
+    ])).toEqual({
+      ownerSessionId: 'child',
+      ownerTitle: 'title-child',
+      displayTitle: 'Worker row',
+      linked: true,
+    })
+
+    expect(resolveJobOwner(row, [
+      { id: 'root', title: 'Root row' },
+    ])).toEqual({
+      ownerSessionId: 'child',
+      ownerTitle: 'title-child',
+      displayTitle: undefined,
+      linked: false,
+    })
+  })
+})
+
 describe('orderJobs', () => {
   it('puts live rows first in start order, then settled rows newest-first', () => {
     const row = (id: string, status: SidebarJobStatus, startedAt: number, finishedAt?: number) => ({
@@ -123,13 +153,15 @@ describe('status presentation helpers', () => {
     expect(jobStatusLabel('failed', t)).toBe('jobStatusFailed')
   })
 
+  // Jobs and agent rows share ONE duration vocabulary (`formatDuration`);
+  // this pins the job-side wording that used to live in `formatJobDuration`.
   it('formats durations in at most two adjacent units', () => {
-    expect(formatJobDuration(0, t)).toBe('0秒')
-    expect(formatJobDuration(45_000, t)).toBe('45秒')
-    expect(formatJobDuration(90_000, t)).toBe('1分30秒')
-    expect(formatJobDuration(3_661_000, t)).toBe('1小时1分')
+    expect(formatDuration(0, t)).toBe('0秒')
+    expect(formatDuration(45_000, t)).toBe('45秒')
+    expect(formatDuration(90_000, t)).toBe('1分30秒')
+    expect(formatDuration(3_661_000, t)).toBe('1小时1分')
     // Negative or fractional input clamps to zero seconds.
-    expect(formatJobDuration(-5, t)).toBe('0秒')
+    expect(formatDuration(-5, t)).toBe('0秒')
   })
 })
 

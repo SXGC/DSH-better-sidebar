@@ -13,7 +13,11 @@
 #   bash scripts/e2e-mount.sh [--grep <playwright-filter>]
 #
 # 环境变量（均可省略）：
-#   DSH_CMD        dsh 命令；缺省 PATH 上的 `dsh`，回退 npx 拉官方包
+#   DSH_CMD        dsh 命令；缺省 PATH 上的 `dsh`。必须是包含
+#                  5cf09d3a0a 的正式 DSH 版本；本脚本不回退 rc 包。
+#   DSH_SOURCE_REPO
+#                  可选的 DSH master 仓库。设置后通过该仓库的 `pnpm dsh`
+#                  启动 source resolver，且 HEAD 必须包含 5cf09d3a0a。
 #   TARBALL        插件 tarball 的绝对路径；缺省时脚本先执行当前 checkout 的
 #                  `pnpm build && pnpm pack`，并使用唯一命名的 fresh artifact
 #   PORT           固定端口（默认 0 = OS 分配，从日志解析 URL）
@@ -30,9 +34,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 DSH_CMD="${DSH_CMD:-dsh}"
-read -r -a DSH_COMMAND <<< "$DSH_CMD"
+DSH_SOURCE_REPO="${DSH_SOURCE_REPO:-}"
 PORT="${PORT:-0}"
 TARBALL="${TARBALL:-}"
+REQUIRED_DSH_BASELINE="5cf09d3a0a"
 GREP_FILTER=""
 if [ "${1:-}" = "--grep" ]; then GREP_FILTER="${2:?--grep 需要参数}"; fi
 
@@ -43,15 +48,24 @@ die()  { printf '\033[31m[e2e-mount]\033[0m %s\n' "$*" >&2; exit 1; }
 command -v node >/dev/null 2>&1 || die "未找到 node（DSH 运行需要 Node.js >= 20）"
 command -v pnpm >/dev/null 2>&1 || die "未找到 pnpm（dsh plugin 转发给 pnpm）"
 
-# dsh CLI 解析：PATH 上的 dsh 优先，否则 npx 拉官方包（同 scripts/install.sh）
-if ! command -v "${DSH_COMMAND[0]}" >/dev/null 2>&1; then
-  if command -v npx >/dev/null 2>&1; then
-    say "PATH 上无 $DSH_CMD，回退 npx -y --package @deepseek-ai/dsh"
-    DSH_CMD="npx -y --package @deepseek-ai/dsh dsh"
-    DSH_COMMAND=(npx -y --package @deepseek-ai/dsh dsh)
-  else
-    die "未找到 $DSH_CMD 或 npx；请先安装 DSH CLI（npm i -g @deepseek-ai/dsh）或用 DSH_CMD 指定"
+if [ -n "$DSH_SOURCE_REPO" ]; then
+  [ -d "$DSH_SOURCE_REPO/.git" ] || die "DSH_SOURCE_REPO 不是 Git 仓库：$DSH_SOURCE_REPO"
+  DSH_SOURCE_REPO="$(cd "$DSH_SOURCE_REPO" && pwd)"
+  git -C "$DSH_SOURCE_REPO" merge-base --is-ancestor "$REQUIRED_DSH_BASELINE" HEAD \
+    || die "DSH_SOURCE_REPO HEAD 不包含 ${REQUIRED_DSH_BASELINE}。"
+  DSH_RUN=(pnpm --dir "$DSH_SOURCE_REPO" dsh)
+  DSH_VERSION="$("${DSH_RUN[@]}" --version 2>/dev/null | tail -1 || true)"
+  say "dsh CLI: ${DSH_VERSION:-unknown}（已从 source repo 验证 ${REQUIRED_DSH_BASELINE}）"
+else
+  # DSH_CMD 可含参数（如自定义 wrapper）；读入数组后逐词执行。
+  read -r -a DSH_RUN <<< "$DSH_CMD"
+  command -v "${DSH_RUN[0]}" >/dev/null 2>&1 \
+    || die "未找到 $DSH_CMD；请安装包含 ${REQUIRED_DSH_BASELINE} 的正式 DSH CLI，或设置 DSH_SOURCE_REPO。"
+  DSH_VERSION="$("${DSH_RUN[@]}" --version 2>/dev/null || true)"
+  if [ -z "$DSH_VERSION" ] || printf '%s\n' "$DSH_VERSION" | grep -q -- '-'; then
+    die "当前 DSH CLI 不是正式版本（${DSH_VERSION:-unknown}）。运行看板真实挂载验收要求包含 ${REQUIRED_DSH_BASELINE} 的首个正式 DSH 版本；开发态 master 请显式设置 DSH_SOURCE_REPO。"
   fi
+  say "dsh CLI: ${DSH_VERSION}（正式版本；调用方需钉住首个包含 ${REQUIRED_DSH_BASELINE} 的版本）"
 fi
 
 # Artifact provenance is part of this gate. Never infer a tarball from an old
@@ -159,7 +173,7 @@ EOF
 
 # 步骤 2：官方 CLI 安装 tarball + bundle 协调（真实挂载路径）
 say "执行 dsh plugin --profile web add file:$TARBALL ..."
-"${DSH_COMMAND[@]}" plugin --profile web add "file:$TARBALL"
+"${DSH_RUN[@]}" plugin --profile web add "file:$TARBALL"
 
 # 步骤 3：校验挂载生效（dsh.profile.bundles 含 dsh-better-sidebar）
 if ! node -e '
@@ -176,7 +190,7 @@ say "挂载已注册：dsh.profile.bundles 包含 dsh-better-sidebar"
 
 # 步骤 4：启动 dsh web（--port 0 = OS 分配，避免端口冲突；keyless 可起）
 say "启动 dsh web（port=${PORT}）..."
-"${DSH_COMMAND[@]}" web --port "$PORT" > "$WEB_LOG" 2>&1 &
+"${DSH_RUN[@]}" web --port "$PORT" > "$WEB_LOG" 2>&1 &
 SERVER_PID=$!
 
 URL=""

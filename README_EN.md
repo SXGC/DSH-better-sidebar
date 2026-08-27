@@ -44,7 +44,7 @@
 - **💻 Real Terminal**: xterm.js + node-pty real shell, reconnect with transcript replay; optionally injects `terminal_*` tools for the model
 - **📂 Model-driven sidebar opens (opt-in)**: with the global setting on, the `sidebar_open` tool lets the model actively open files / folders (tree rooted there) / HTTP(S) pages in the sidebar
 - **🌿 Git Panel**: real diff + VSCode-style diff tabs, history, right-click to stage / commit / revert; under a workspace container it discovers child repositories and shows a **repository selector**, with linked-worktree change discovery
-- **🧩 Background Tasks**: agent topology + background tasks (exit codes / live output / force-kill)
+- **📈 Run Dashboard**: a tree Gantt for the current root session and all native subagents, with restored multi-segment state, filters, initial-task details, chat navigation, agent interrupt / close controls, and a separate background-jobs list (exit codes / live output / force-kill)
 - **💬 Side Chat (beta)**: Codex-style side threads — the child inherits the parent's FULL context (completed turns + the pending question + the in-progress turn's assistant output and tool activity, honestly frozen as "interrupted") and runs independently without entering the main conversation; threads support continuous follow-ups (auto-resumed after a DSH restart) and one-click "Save as new session" promotion to a top-level session
 - **🪟 Official-layout Dual Workbench**: DSH's `right-sidebar` hosts the docked workbench, with right and bottom work areas split vertically inside it; drag tabs to split / merge panes, while mobile uses the host's full-width right-sidebar surface
 - **🪟 Free Windows**: drag any tab onto the main conversation area to turn it into a movable / resizable / raiseable floating window (default 390×780); drag it back onto a pane to dock; persisted per session. Windows live in the official `shell.overlay`, so they remain visible and interactive after the right sidebar closes. `features` includes `'floatWindows'` and plugin tabs are supported identically
@@ -261,6 +261,18 @@ The GitHub topic [`dsh-better-sidebar`](https://github.com/topics/dsh-better-sid
 
 **Supported DSH versions**: <a href="https://www.npmjs.com/package/@deepseek-ai/dsh?activeTab=versions"><img alt="Supported DSH versions: 0.1.0-rc.8 · 0.1.1-rc.1 · 0.1.1-rc.2" src="https://img.shields.io/badge/DSH-0.1.0--rc.8_%C2%B7_0.1.1--rc.1_%C2%B7_0.1.1--rc.2-4d6bfe" /></a> · full release history on the [Releases](https://github.com/omdsh-dev/DSH-better-sidebar/releases) page
 
+### Unreleased: Run Dashboard
+
+> ⚠️ **Formal npm delivery is blocked on the DSH baseline**: the Run Dashboard depends on public session / subagent APIs that include DSH `5cf09d3a0a`. Before npm release, every `@deepseek-ai/*` dependency and the mount CI lane must move to the first formal DSH release that contains that commit; this change does not add a `0.1.0-rc.8` or `0.1.1-rc.2` fallback.
+
+For pre-release integration against the current DSH master, run `DSH_SOURCE_REPO=/path/to/deepseek-harness pnpm test:mount`. The mount script verifies baseline ancestry and starts the checkout's complete workspace package closure through its `pnpm dsh` source resolver; this development evidence does not unblock npm delivery.
+
+**✨ New features**
+
+- 📈 **"Background Tasks" becomes "Run Dashboard"**: the built-in tab id stays `subagent`, but the page now shows the current root session and every native subagent. Desktop uses a frozen left column plus a horizontal Gantt timeline; narrow screens degrade to a tree list while keeping status, path, model, details, chat navigation, and valid agent controls.
+- 🔎 **Agent inspection and filters**: filter by state, model, path, text, and long-running agents. The default long-running threshold is 60 minutes and can be changed or disabled in settings. Full initial tasks are read only after the user opens details; this sensitive text is not stored in localStorage, settings documents, or logs.
+- 🧰 **Agent controls and job linkage**: continuable subagents can be interrupted or closed with two-click confirmation. The page does not offer restart or rerun for agents or jobs. The background-jobs list keeps generic `JobView` rows such as `bash`, owner, status, duration, the shared output dock, and two-click kill; clicking an owner locates and highlights the matching agent row.
+
 ### v0.16.1
 
 All changes since v0.16.0:
@@ -454,7 +466,7 @@ The dashed cards at the end of the "Sidebar content" / "File viewers" grids in t
 ## 🛠️ Development & Build
 
 ```sh
-pnpm install      # @deepseek-ai/* devDependencies resolve to 0.1.1-rc.1 (published) — no token needed
+pnpm install      # current deps resolve from npm; Run Dashboard release must move to a formal DSH build containing 5cf09d3a0a
 pnpm typecheck    # tsc --noEmit
 pnpm build        # → lib/index.js + lib/invariant.js + lib/client.js + lib/client-registry.js + lib/types
 pnpm test         # vitest (includes manifest consistency guard; build first)
@@ -472,6 +484,7 @@ pnpm watch        # tsdown --watch
 ## ⚠️ Known Limitations
 
 - Git has no push/pull/fetch; Markdown previews provide a manual refresh button with confirmation before discarding unsaved edits; no file watcher or automatic polling; tool inline file-open buttons cannot be intercepted
+- Run Dashboard npm release waits for the first formal DSH version that contains `5cf09d3a0a`; it will not fall back to `0.1.0-rc.8` / `0.1.1-rc.2`
 - Dragging a terminal tab to another pane remounts it (shell restarts)
 - Office-suite preview (.docx/.xlsx/.pptx) moved to the recommended office plugin (see the "Add plugins" modals in settings); without it these files fall through to the code/download fallbacks
 - Browser sandbox has no login state / third-party cookies are restricted; some sites need popup login; sites that refuse embedding via `X-Frame-Options`/`frame-ancestors` (e.g. arxiv.org) show a reason panel (with "Open in browser"); in-iframe navigation does not enter the back stack

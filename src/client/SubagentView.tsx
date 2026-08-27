@@ -1,25 +1,8 @@
 /**
- * Subagent page: the FULL agent topology of the current tree's main session.
- *
- * The root is resolved by walking the durable parent chain upward from the
- * current session to the first non-subagent session — the MAIN session — and
- * every subagent under it shares this one topology view, no matter how deep
- * the current selection is (including a subagent transcript opened in the
- * main view). The main agent renders as the root node card (click it to jump
- * back to the main session), with its subagents hanging below it in clearly
- * LAYERED levels: tree connector lines (first level included) and per-level
- * indentation show the hierarchy, and the currently-open session is
- * highlighted in place. Every branch is expanded automatically (lazy
- * catalogs hydrate on demand and consume live membership while visible).
- *
- * Each node card carries live status (state dot, durable label, mode and
- * activity); while a child RUNS, its card additionally shows the LAST text
- * output and LAST tool call pulled from its history tail, auto-refreshing
- * every few seconds while the page is visible. Clicking a card jumps
- * straight into the child transcript (`openSubagent`); the page stays open
- * and the topology remains rooted at the main session.
+ * Run Dashboard page: a stable tree row list plus a shared horizontal Gantt
+ * timeline for the current root agent and all recoverable descendants.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useSyncExternalStore } from 'react'
 import clsx from 'clsx'
 import {
@@ -27,352 +10,62 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   Context,
+  SidebarContinuableSubagentAddress,
   SidebarSessionList,
   SidebarSessionSummary,
   SidebarSubagentAddress,
+  SidebarSubagentControlOutcome,
   SidebarSubagentCatalog,
-  SidebarSubagentChildEntry,
-  SidebarSubagentDiagnosticEntry,
   SidebarJobView,
 } from '../context-types.ts'
+import type { AgentDetailResult, AgentTimelineResult, AgentState, SpawnModelSelection } from '../agent-timeline-routes.ts'
 import {
   collectBranchIds,
-  countSubagentDescendants,
-  isSideThreadSummary,
   rootAncestor,
 } from './subagent-detect.ts'
-import { type LastActivity } from '../subagent-activity.ts'
-import { SIDE_LABEL_PREFIX } from '../sidechat-core.ts'
 import {
   collectTreeJobs,
-  formatJobDuration,
   isJobLive,
   orderJobs,
+  resolveJobOwner,
   jobDotState,
   jobStatusLabel,
+  type JobOwnerDisplayRow,
   type TreeJob,
 } from './subagent-jobs.ts'
 import { api, type JobOutputResult } from './api.ts'
 import { IconStopOutline16 } from './icons.tsx'
-import { t } from './locales.ts'
+import {
+  agentStateKind,
+  buildTimelineDisplay,
+  countActiveFilters,
+  displaySegments,
+  filterTimelineDisplay,
+  formatAgentState,
+  formatDuration,
+  normalizeLongRunningMinutes,
+  timelineTicks,
+  type TimelineDisplay,
+  type TimelineDisplayFilters,
+  type TimelineDisplayRow,
+  type TimelineSegment,
+} from './agent-timeline.ts'
+import {
+  clampRunDashboardTreeWidth,
+  defaultRunDashboardTreeWidth,
+  PANEL_DEFAULT,
+  RUN_DASHBOARD_TREE_MIN,
+  type SidebarStore,
+} from './state.ts'
+import { isZh, t } from './locales.ts'
 import css from './SubagentView.module.css'
 
-/** Refresh cadence of the live "last text + tool call" lines while a child runs. */
-const POLL_MS = 3000
-/** Preview cap of one tool-call argument line. */
-const ARGS_PREVIEW = 60
 /** Refresh cadence of an expanded job-output panel while its job runs. */
 const JOB_POLL_MS = 2000
 /** How long the kill button stays armed before it needs re-confirming. */
 const JOB_KILL_ARM_MS = 3000
-
-/** The direct subagent children of one parent (durable `origin` rows;
- *  Side Chat threads ride the same origin but are tab-strip conversations,
- *  never topology). */
-function directChildren(
-  byId: Readonly<Record<string, SidebarSessionSummary>>,
-  parentSessionId: string,
-): SidebarSessionSummary[] {
-  return Object.values(byId).filter(
-    summary => summary.origin === 'subagent' && summary.parentId === parentSessionId
-      && !isSideThreadSummary(summary),
-  )
-}
-
-/** Human label of one catalog child: durable label, then summary title, then id. */
-function childLabel(
-  entry: SidebarSubagentChildEntry,
-  summary: SidebarSessionSummary | undefined,
-): string {
-  return entry.label ?? summary?.displayTitle ?? entry.id
-}
-
-function diagnosticReason(entry: SidebarSubagentDiagnosticEntry): string {
-  switch (entry.reason) {
-    case 'corrupt': return t('subagentDiagCorrupt')
-    case 'unsupported': return t('subagentDiagUnsupported')
-    case 'unavailable': return t('subagentDiagUnavailable')
-  }
-}
-
-/** The secondary line of one card: title · mode · activity (skips empty parts). */
-function cardSecondary(
-  summary: SidebarSessionSummary | undefined,
-  entry: SidebarSubagentChildEntry,
-): string {
-  return [
-    summary?.displayTitle,
-    entry.mode === 'one-shot' ? t('subagentModeOneShot') : t('subagentModeContinuable'),
-    entry.activity === 'running' ? t('subagentRunning') : t('subagentInactive'),
-  ].filter(Boolean).join(' · ')
-}
-
-/** First `limit` characters with an ellipsis when truncated. */
-function preview(text: string, limit: number): string {
-  return text.length > limit ? `${text.slice(0, limit)}…` : text
-}
-
-/** Collapse whitespace for the single-paragraph live-text preview. */
-function flatten(text: string): string {
-  return text.replace(/\s+/g, ' ').trim()
-}
-
-/** Disabled "loading…" cards backed by the summary mirror while a catalog hydrates. */
-function CatalogLoadingRows(props: {
-  parentSessionId: string
-  byId: Readonly<Record<string, SidebarSessionSummary>>
-  level: number
-}) {
-  const { parentSessionId, byId, level } = props
-  const children = directChildren(byId, parentSessionId)
-  if (children.length === 0) {
-    return <div className={css.subagentEmpty}>{t('loading')}</div>
-  }
-  return (
-    <>
-      {children.map(summary => (
-        <div
-          key={summary.id}
-          role="treeitem"
-          aria-disabled="true"
-          aria-level={level}
-          aria-label={t('loading')}
-          className={`${css.subagentRow} ${css.subagentRowDisabled} ${css.subagentRowLoading}`}
-        >
-          <StateDot state={summary.running === true ? 'ongoing' : 'done'} className={css.subagentDot} />
-          <span className={css.subagentContent}>
-            <span className={css.subagentLabel}>{t('loading')}</span>
-          </span>
-        </div>
-      ))}
-    </>
-  )
-}
-
-/**
- * The live lines of one RUNNING subagent card: a pure presentation of the
- * batch `subagents.live` activity. The polling lives in one place (the
- * SubagentView hook), not per card. A running child with neither output yet
- * reads "thinking…".
- */
-function SubagentLiveLines(props: { live: LastActivity | undefined }) {
-  const { live } = props
-  if (live?.text === undefined && live?.tool === undefined) {
-    return <span className={css.subagentLive}>{t('subagentThinking')}</span>
-  }
-  return (
-    <>
-      {live.tool !== undefined && (
-        <span className={css.subagentLive}>
-          <span className={css.subagentLiveTool}>{live.tool.name}</span>
-          {live.tool.args !== '' && (
-            <span className={css.subagentLiveArgs}>{preview(live.tool.args, ARGS_PREVIEW)}</span>
-          )}
-        </span>
-      )}
-      {live.text !== undefined && (
-        <span className={css.subagentLiveText}>{flatten(live.text)}</span>
-      )}
-    </>
-  )
-}
-
-/**
- * One shared live-preview poller for the whole Subagent tree. Unlike the old
- * per-card `subagents.history` timers, this sends at most ONE `subagents.live`
- * request at a time: a recursive timeout starts only after the previous
- * request settles, so a slow host never sees abort/restart storms.
- */
-function useSubagentLive(
-  rootId: string | undefined,
-  active: boolean,
-): Readonly<Record<string, LastActivity>> {
-  const [live, setLive] = useState<Record<string, LastActivity>>({})
-  const controllerRef = useRef<AbortController | undefined>(undefined)
-
-  // A new tree must never inherit another root's live previews.
-  useEffect(() => { setLive({}) }, [rootId])
-
-  useEffect(() => {
-    if (rootId === undefined || !active) return
-    const targetRootId = rootId
-    let disposed = false
-    let timer: number | undefined
-
-    const schedule = (): void => {
-      if (disposed) return
-      timer = window.setTimeout(() => { void load() }, POLL_MS)
-    }
-    async function load(): Promise<void> {
-      if (disposed) return
-      const controller = new AbortController()
-      controllerRef.current = controller
-      try {
-        const result = await api.subagentsLive(targetRootId, controller.signal)
-        if (!disposed) setLive(result.live)
-      } catch {
-        // Keep the last known live map; the next scheduled poll retries.
-      } finally {
-        if (controllerRef.current === controller) controllerRef.current = undefined
-        if (!disposed) schedule()
-      }
-    }
-
-    void load()
-    return () => {
-      disposed = true
-      if (timer !== undefined) window.clearTimeout(timer)
-      controllerRef.current?.abort()
-      controllerRef.current = undefined
-    }
-  }, [rootId, active])
-
-  return live
-}
-
-interface RowsProps {
-  parentSessionId: string
-  catalog: SidebarSubagentCatalog | undefined
-  catalogs: Readonly<Record<string, SidebarSubagentCatalog>>
-  byId: Readonly<Record<string, SidebarSessionSummary>>
-  level: number
-  /** The currently-open session id (highlighted in the topology). */
-  currentSessionId: string
-  /** The batch live-preview map (child id → latest activity). */
-  live: Readonly<Record<string, LastActivity>>
-  openChild: (address: SidebarSubagentAddress) => void
-  refresh: (parentSessionId: string) => void
-}
-
-/** Render one topology level; branches are always expanded (lazy catalogs). */
-function CatalogRows({
-  parentSessionId, catalog, catalogs, byId, level, currentSessionId, live,
-  openChild, refresh,
-}: RowsProps) {
-  const emptyLoading = catalog?.state === 'loading' && catalog.entries.length === 0
-  // Side Chat threads are honest catalog citizens (durable descriptor, 'Side: '
-  // label) but they are NOT subagent topology — filter them out here (the tab
-  // strip owns them). Legacy threads created before the descriptor fix still
-  // arrive as corrupt diagnostics; they are recognized by summary title.
-  const visibleEntries = (catalog?.entries ?? []).filter((entry) => {
-    if (entry.kind === 'child') return !(entry.label?.startsWith(SIDE_LABEL_PREFIX) ?? false)
-    return !(byId[entry.id]?.displayTitle.startsWith(SIDE_LABEL_PREFIX) ?? false)
-  })
-  return (
-    <>
-      {emptyLoading && (
-        <CatalogLoadingRows parentSessionId={parentSessionId} byId={byId} level={level} />
-      )}
-      {catalog?.state === 'error' && (
-        <div className={css.subagentError}>
-          <span>{catalog.error?.message ?? t('error')}</span>
-          <button
-            type="button"
-            className={css.subagentErrorRetry}
-            onClick={() => { refresh(parentSessionId) }}
-          >
-            <IconRefreshOutline14 />
-            {t('retry')}
-          </button>
-        </div>
-      )}
-      {visibleEntries.map((entry) => {
-        if (entry.kind === 'diagnostic') {
-          return (
-            <div key={entry.id} className={css.subagentNode}>
-              <div
-                role="treeitem"
-                aria-disabled="true"
-                aria-level={level}
-                className={`${css.subagentRow} ${css.subagentRowDisabled}`}
-                title={diagnosticReason(entry)}
-              >
-                <StateDot state="error" className={css.subagentDot} />
-                <span className={css.subagentContent}>
-                  <span className={css.subagentLabel}>{entry.id}</span>
-                  <span className={css.subagentSecondary}>{diagnosticReason(entry)}</span>
-                </span>
-              </div>
-            </div>
-          )
-        }
-
-        const childCatalog = catalogs[entry.id]
-        const knownLeaf = !entry.hasChildren
-        const summary = byId[entry.id]
-        const label = childLabel(entry, summary)
-        const secondary = cardSecondary(summary, entry)
-        const childLoading = childCatalog === undefined
-          || (childCatalog.state === 'loading' && childCatalog.entries.length === 0)
-        const address: SidebarSubagentAddress = {
-          parentSessionId,
-          childSessionId: entry.id,
-          mode: entry.mode,
-        }
-        const current = entry.id === currentSessionId
-
-        return (
-          <div key={entry.id} className={css.subagentNode}>
-            <div
-              role="treeitem"
-              tabIndex={0}
-              aria-level={level}
-              aria-label={`${label} ${secondary}`}
-              aria-current={current ? 'true' : undefined}
-              {...knownLeaf ? {} : { 'aria-expanded': true }}
-              className={clsx(css.subagentRow, current && css.subagentRowActive)}
-              onClick={() => { openChild(address) }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  openChild(address)
-                }
-              }}
-            >
-              <StateDot
-                state={entry.activity === 'running' ? 'ongoing' : 'done'}
-                className={css.subagentDot}
-              />
-              <span className={css.subagentContent}>
-                <span className={css.subagentLabel}>{label}</span>
-                <span className={css.subagentSecondary}>{secondary}</span>
-                {entry.activity === 'running' && (
-                  <SubagentLiveLines live={live[entry.id]} />
-                )}
-              </span>
-            </div>
-            {!knownLeaf && (
-              <div role="group" className={css.subagentChildren} aria-busy={childLoading || undefined}>
-                {childCatalog === undefined
-                  ? (
-                    <CatalogLoadingRows
-                      parentSessionId={entry.id}
-                      byId={byId}
-                      level={level + 1}
-                    />
-                  )
-                  : (
-                    <CatalogRows
-                      parentSessionId={entry.id}
-                      catalog={childCatalog}
-                      catalogs={catalogs}
-                      byId={byId}
-                      level={level + 1}
-                      currentSessionId={currentSessionId}
-                      live={live}
-                      openChild={openChild}
-                      refresh={refresh}
-                    />
-                  )}
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </>
-  )
-}
+/** How long the agent close button stays armed before it needs re-confirming. */
+const AGENT_CLOSE_ARM_MS = 3000
 
 /**
  * The shared output dock of the jobs section: ONE pane at the bottom of the
@@ -411,8 +104,9 @@ function JobOutputPane(props: {
   }, [ownerSessionId, job.id])
 
   useEffect(() => {
+    if (!active) return
     void load()
-    if (!active || !isJobLive(job)) return
+    if (!isJobLive(job)) return
     const timer = window.setInterval(() => { void load() }, JOB_POLL_MS)
     return () => { window.clearInterval(timer) }
   }, [load, active, job.status])
@@ -476,15 +170,25 @@ function JobsSection(props: {
   byId: SidebarSessionList['byId']
   jobsBySession: SidebarSessionList['jobsBySession']
   rootId: string | undefined
+  ownerRows: readonly JobOwnerDisplayRow[] | undefined
+  locatedOwnerId: string | undefined
+  onLocateOwner: (ownerSessionId: string) => void
+  /**
+   * Selection lives in the page: the job output pane and the agent detail
+   * panel share the one sticky bottom dock, so opening either closes the
+   * other instead of stacking two docks on the same edge.
+   */
+  selectedJobId: string | undefined
+  onSelectJob: (jobId: string | undefined) => void
   /** The page is visible (active tab + open panel): skip polling otherwise. */
   active: boolean
 }) {
-  const { byId, jobsBySession, rootId, active } = props
+  const { byId, jobsBySession, rootId, ownerRows, locatedOwnerId, onLocateOwner, active } = props
+  const { selectedJobId: selectedId, onSelectJob } = props
   const rows = useMemo(
     () => orderJobs(collectTreeJobs(byId, jobsBySession, rootId)),
     [byId, jobsBySession, rootId],
   )
-  const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
   const [armedId, setArmedId] = useState<string | undefined>(undefined)
   const [killingId, setKillingId] = useState<string | undefined>(undefined)
   const [killErrorId, setKillErrorId] = useState<string | undefined>(undefined)
@@ -500,11 +204,6 @@ function JobsSection(props: {
     () => rows.reduce((count, row) => count + (isJobLive(row.job) ? 1 : 0), 0),
     [rows],
   )
-  const multiOwner = useMemo(
-    () => new Set(rows.map(row => row.ownerSessionId)).size > 1,
-    [rows],
-  )
-
   // The kill button stays armed only briefly; a stray click must never kill.
   useEffect(() => {
     if (armedId === undefined) return
@@ -513,17 +212,17 @@ function JobsSection(props: {
   }, [armedId])
 
   useEffect(() => {
-    if (liveCount === 0) return
+    if (!active || liveCount === 0) return
     setNow(Date.now())
     const timer = window.setInterval(() => { setNow(Date.now()) }, 1_000)
     return () => { window.clearInterval(timer) }
-  }, [liveCount])
+  }, [active, liveCount])
 
   // The docked output pane follows its job: when the selected job leaves
   // the mirror (settled and dropped, or the tree switched), close the dock.
   useEffect(() => {
-    if (selectedId !== undefined && selectedRow === undefined) setSelectedId(undefined)
-  }, [selectedId, selectedRow])
+    if (selectedId !== undefined && selectedRow === undefined) onSelectJob(undefined)
+  }, [selectedId, selectedRow, onSelectJob])
 
   // NOTE: every hook must live ABOVE the empty-state return — a hook below it
   // would flip this component's hook count when the mirror empties and crash
@@ -562,14 +261,14 @@ function JobsSection(props: {
             const armed = armedId === job.id
             const killing = killingId === job.id
             const killFailed = killErrorId === job.id
+            const owner = resolveJobOwner(row, ownerRows)
             const elapsed = live
               ? now - job.startedAt
               : (job.finishedAt ?? job.startedAt) - job.startedAt
             const secondary = [
-              ...(multiOwner ? [row.ownerTitle] : []),
               jobStatusLabel(job.status, t),
               ...(job.detail !== undefined && job.detail !== '' ? [job.detail] : []),
-              formatJobDuration(elapsed, t),
+              formatDuration(elapsed, t),
             ].filter(Boolean).join(' · ')
             return (
               <li
@@ -585,7 +284,7 @@ function JobsSection(props: {
                   className={css.jobsRowMain}
                   aria-pressed={selected}
                   aria-label={`${job.label} ${secondary}`}
-                  onClick={() => { setSelectedId(selected ? undefined : job.id) }}
+                  onClick={() => { onSelectJob(selected ? undefined : job.id) }}
                 >
                   <StateDot state={jobDotState(job.status)} className={css.jobsDot} />
                   <span className={css.jobsContent}>
@@ -596,6 +295,27 @@ function JobsSection(props: {
                     <span className={css.jobsSecondary}>{secondary}</span>
                   </span>
                 </button>
+                {owner.linked ? (
+                  <button
+                    type="button"
+                    className={clsx(css.jobsOwner, locatedOwnerId === owner.ownerSessionId && css.jobsOwnerActive)}
+                    aria-label={t('jobOwnerLocate', { owner: owner.ownerTitle })}
+                    title={t('jobOwnerLocate', { owner: owner.ownerTitle })}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onLocateOwner(owner.ownerSessionId)
+                    }}
+                  >
+                    {owner.displayTitle ?? owner.ownerTitle}
+                  </button>
+                ) : (
+                  <span
+                    className={css.jobsOwnerUnlinked}
+                    title={`${owner.ownerTitle} · ${t('jobOwnerUnlinked')}`}
+                  >
+                    {owner.ownerTitle} · {t('jobOwnerUnlinked')}
+                  </span>
+                )}
                 {job.status === 'running' && (
                   <button
                     type="button"
@@ -623,7 +343,7 @@ function JobsSection(props: {
           ownerSessionId={selectedRow.ownerSessionId}
           job={selectedRow.job}
           active={active}
-          onClose={() => { setSelectedId(undefined) }}
+          onClose={() => { onSelectJob(undefined) }}
         />
       )}
     </>
@@ -631,156 +351,1268 @@ function JobsSection(props: {
 }
 
 /**
- * The sidebar's Subagent topology page.
- * @param props - current session id, whether the page is actually visible
- *   (active tab + open panel), the client context, and an optional
- *   jump-notify hook fired right before `openSubagent` (lets the sidebar
- *   shell re-open the Subagent page after the conversation switch lands on
- *   the child session).
- * @returns the main agent's topology tree, or the empty/error/loading states.
+ * Narrowest sidebar that still fits a readable tree column NEXT TO a shared
+ * gantt canvas. Below it the page falls back to the row list, whose per-row
+ * spark bar carries the same comparable spans — a 360px sidebar split into
+ * two columns leaves both a stub, which is worse than one good list.
+ */
+const RUN_DASHBOARD_GANTT_MIN_PANEL = 520
+const TIMELINE_BASE_WIDTH = 600
+const TIMELINE_PAN_STEP = 64
+const TIMELINE_ZOOM_FACTOR = 1.25
+const TREE_KEYBOARD_STEP = 16
+/** Narrowest gantt bar that can carry its state word without clipping it. */
+const SEGMENT_LABEL_MIN_PX = 54
+
+type TimelineLoadState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; timeline: AgentTimelineResult }
+  | { kind: 'error'; message: string }
+
+type AgentDetailLoadState =
+  | { kind: 'idle' }
+  | { kind: 'loading'; agentSessionId: string }
+  | { kind: 'ready'; agentSessionId: string; detail: AgentDetailResult }
+  | { kind: 'error'; agentSessionId: string; message: string }
+
+type AgentControlAction = 'interrupt' | 'close'
+
+type AgentControlState =
+  | { kind: 'idle' }
+  | { kind: 'loading'; agentSessionId: string; action: AgentControlAction }
+  | { kind: 'done'; agentSessionId: string; action: AgentControlAction; outcome: SidebarSubagentControlOutcome }
+  | { kind: 'error'; agentSessionId: string; action: AgentControlAction; outcome: SidebarSubagentControlOutcome }
+
+const STATE_FILTER_OPTIONS = [
+  'all',
+  'provisioning',
+  'running',
+  'waiting',
+  'idle',
+  'completed',
+  'interrupted',
+  'errored',
+  'cold',
+  'closed',
+] as const
+
+/**
+ * The layout the dashboard can actually afford. The PANEL's width decides it
+ * — a 360px sidebar inside a 1600px window must never claim the desktop
+ * split, or the tree column eats the gantt and both end up stubs. The body
+ * element refines the number once it has been measured (the panel width is
+ * the outer shell). Environments without ResizeObserver (jsdom) keep the
+ * panel width.
+ */
+function useDashboardLayout(
+  bodyRef: React.RefObject<HTMLDivElement | null>,
+  panelWidth: number,
+): 'grid' | 'list' {
+  const [measured, setMeasured] = useState<number | undefined>(undefined)
+
+  useEffect(() => {
+    const body = bodyRef.current
+    if (body === null || typeof ResizeObserver === 'undefined') return
+    // Width never feeds back into the body's own width, so this cannot loop.
+    const measure = (): void => {
+      setMeasured(current => (body.clientWidth > 0 ? body.clientWidth : current))
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(body)
+    measure()
+    return () => { observer.disconnect() }
+  }, [bodyRef])
+
+  const width = measured ?? Math.round(panelWidth)
+  return width >= RUN_DASHBOARD_GANTT_MIN_PANEL ? 'grid' : 'list'
+}
+
+/** The state word in the active locale: every surface spells it the same. */
+function stateWord(state: AgentState): string {
+  return formatAgentState(state, isZh() ? 'zh' : 'en')
+}
+
+function agentRowState(row: TimelineDisplay['rows'][number]): string {
+  if (row.state === undefined) return row.kind === 'diagnostic' ? t('subagentDiagUnavailable') : t('subagentInactive')
+  return stateWord(row.state)
+}
+
+function stateFilterLabel(value: string): string {
+  if (value === 'all') return t('runDashboardFilterAll')
+  if (value === 'cold') return stateWord({ residency: 'cold', lastTurn: 'idle' })
+  if (value === 'closed') return stateWord({ residency: 'closed' })
+  let state: AgentState
+  switch (value) {
+    case 'waiting':
+      state = { residency: 'live', turn: { kind: 'waiting', reason: 'mailbox', since: 0, deadline: 0 } }
+      break
+    case 'completed':
+      state = { residency: 'live', turn: { kind: 'completed' } }
+      break
+    case 'errored':
+      state = { residency: 'live', turn: { kind: 'errored', code: 'error' } }
+      break
+    case 'provisioning':
+      state = { residency: 'live', turn: { kind: 'provisioning' } }
+      break
+    case 'running':
+      state = { residency: 'live', turn: { kind: 'running' } }
+      break
+    case 'idle':
+      state = { residency: 'live', turn: { kind: 'idle' } }
+      break
+    case 'interrupted':
+      state = { residency: 'live', turn: { kind: 'interrupted' } }
+      break
+    default:
+      state = { residency: 'live', turn: { kind: 'idle' } }
+  }
+  return stateWord(state)
+}
+
+function formatTime(value: number | undefined): string {
+  if (value === undefined) return '—'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleTimeString()
+}
+
+function timelineWidth(zoom: number): number {
+  return Math.round(TIMELINE_BASE_WIDTH * zoom)
+}
+
+/** A segment's placement on the shared range, in percent of the canvas. */
+function segmentGeometry(
+  segment: TimelineSegment,
+  range: NonNullable<TimelineDisplay['range']>,
+  now: number,
+): { left: number; width: number } {
+  const span = Math.max(1, range.end - range.start)
+  return {
+    left: ((segment.start - range.start) / span) * 100,
+    // A hairline minimum keeps instant transitions (a `closed` point) visible.
+    width: Math.max(0.5, (((segment.end ?? now) - segment.start) / span) * 100),
+  }
+}
+
+/** Short axis stamp: seconds only matter once the grid is finer than a minute. */
+function formatTick(time: number, stepMs: number): string {
+  return new Date(time).toLocaleTimeString([], stepMs < 60_000
+    ? { hour: '2-digit', minute: '2-digit', second: '2-digit' }
+    : { hour: '2-digit', minute: '2-digit' })
+}
+
+function modelLabel(model: SpawnModelSelection | undefined): string {
+  if (model === undefined) return '—'
+  return [
+    `${model.provider}/${model.model}`,
+    model.reasoningEffort,
+    model.serviceTier,
+  ].filter(Boolean).join(' · ')
+}
+
+function forkTurnsLabel(value: AgentDetailResult['forkTurns']): string {
+  return typeof value === 'number' ? String(value) : value
+}
+
+/**
+ * The tree's dominant model label. Rows on the dominant model keep their
+ * meta line empty (the detail panel still spells it); only a deviating
+ * model earns a line of row space.
+ */
+function dominantModelLabel(rows: readonly TimelineDisplayRow[]): string | undefined {
+  const counts = new Map<string, number>()
+  for (const row of rows) {
+    if (row.model === undefined) continue
+    const label = modelLabel(row.model)
+    counts.set(label, (counts.get(label) ?? 0) + 1)
+  }
+  let best: string | undefined
+  let bestCount = 0
+  for (const [label, count] of counts) {
+    if (count > bestCount) {
+      best = label
+      bestCount = count
+    }
+  }
+  return best
+}
+
+function operationId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `run-dashboard-close-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+function agentAddress(row: TimelineDisplayRow): SidebarSubagentAddress | undefined {
+  return row.kind === 'agent' && row.parentSessionId !== undefined && row.mode !== undefined
+    ? { parentSessionId: row.parentSessionId, childSessionId: row.id, mode: row.mode }
+    : undefined
+}
+
+function continuableAgentAddress(row: TimelineDisplayRow): SidebarContinuableSubagentAddress | undefined {
+  const address = agentAddress(row)
+  return address?.mode === 'continuable' ? address as SidebarContinuableSubagentAddress : undefined
+}
+
+function rootScopedControlAddress(
+  rootSessionId: string | undefined,
+  row: TimelineDisplayRow,
+): SidebarContinuableSubagentAddress | undefined {
+  const address = continuableAgentAddress(row)
+  return address === undefined || rootSessionId === undefined
+    ? undefined
+    : { parentSessionId: rootSessionId, childSessionId: address.childSessionId, mode: 'continuable' }
+}
+
+function canInterruptAgent(row: TimelineDisplayRow): boolean {
+  if (continuableAgentAddress(row) === undefined || row.state?.residency !== 'live') return false
+  return row.state.turn.kind === 'running' || row.state.turn.kind === 'waiting'
+}
+
+function canCloseAgent(row: TimelineDisplayRow): boolean {
+  return continuableAgentAddress(row) !== undefined && row.state?.residency !== 'closed'
+}
+
+function detailProperties(detail: AgentDetailResult): Array<readonly [string, string]> {
+  return [
+    ['backend', detail.backend],
+    ['forkTurns', forkTurnsLabel(detail.forkTurns)],
+    ['requestedModel', modelLabel(detail.requestedModelSelection)],
+    ['effectiveModel', modelLabel(detail.effectiveModelSelection)],
+    ['tools', detail.allowedTools.length === 0 ? '—' : detail.allowedTools.join(', ')],
+    ['sandbox', detail.sandboxMode ?? '—'],
+    ['approval', detail.approvalPolicy ?? '—'],
+    ['filesystem', detail.filesystemPolicy],
+  ]
+}
+
+type UnavailableInitialTaskReason = Extract<AgentDetailResult['initialTask'], { available: false }>['reason']
+
+function initialTaskUnavailableLabel(reason: UnavailableInitialTaskReason): string {
+  return reason === 'not-accepted'
+    ? t('runDashboardDetailTaskNotAccepted')
+    : t('runDashboardDetailTaskSessionUnavailable')
+}
+
+function agentControlOutcomeLabel(action: AgentControlAction, outcome: SidebarSubagentControlOutcome): string {
+  if (outcome === 'accepted') {
+    return action === 'interrupt'
+      ? t('runDashboardControlInterruptAccepted')
+      : t('runDashboardControlCloseAccepted')
+  }
+  switch (outcome) {
+    case 'forbidden': return t('runDashboardControlForbidden')
+    case 'not-found': return t('runDashboardControlNotFound')
+    case 'not-live': return t('runDashboardControlNotLive')
+    case 'closed': return t('runDashboardControlClosed')
+    case 'failed': return t('runDashboardControlFailed')
+  }
+}
+
+function catalogSignature(
+  rootId: string | undefined,
+  catalogs: Readonly<Record<string, SidebarSubagentCatalog>>,
+  byId: Readonly<Record<string, SidebarSessionSummary>>,
+): string {
+  if (rootId === undefined) return ''
+  const rows = [rootId, ...collectBranchIds(catalogs, rootId)].map((id) => {
+    const catalog = catalogs[id]
+    const summary = byId[id]
+    return [
+      id,
+      summary?.running === true ? 'running' : 'idle',
+      catalog?.state ?? 'missing',
+      ...(catalog?.entries ?? []).map(entry => entry.kind === 'child'
+        ? `${entry.id}:${entry.activity}:${entry.mode}:${entry.hasChildren ? 1 : 0}`
+        : `${entry.id}:diagnostic:${entry.reason}`),
+    ].join('|')
+  })
+  return rows.join('\n')
+}
+
+/**
+ * The gantt bars of one row, laid out on the SHARED display range so two
+ * rows' spans are comparable by eye. Used twice: as the wide canvas lane and
+ * as the per-row spark strip of the narrow list — same geometry, same state
+ * classes, so a bar means the same thing in both layouts.
+ */
+function TimelineBars(props: {
+  row: TimelineDisplayRow
+  range: TimelineDisplay['range']
+  now: number
+  /** Canvas width in px; a bar narrower than a label stays wordless. */
+  labelWidth?: number
+  className?: string
+}) {
+  const { row, range, now, labelWidth, className } = props
+  if (range === null) return <span className={className} />
+  // Slivers below ~3px of track merge into their neighbour: the spark reads
+  // as phases, not confetti. The canvas keeps detail as the zoom grows.
+  const minFraction = labelWidth === undefined ? 0.01 : 3 / Math.max(1, labelWidth)
+  const segments = displaySegments(row.segments, range, now, minFraction)
+  const bandStart = row.startedAt ?? segments[0]?.start
+  const bandEnd = segments.reduce((end, segment) => Math.max(end, segment.end ?? now), bandStart ?? 0)
+  return (
+    <span className={className}>
+      {bandStart !== undefined && segments.length > 0 && (
+        <span
+          className={css.runDashboardBand}
+          style={(({ left, width }) => ({ left: `${left}%`, width: `${width}%` }))(
+            segmentGeometry({ start: bandStart, end: bandEnd, state: row.segments[0]!.state }, range, now),
+          )}
+          aria-hidden="true"
+        />
+      )}
+      {segments.map((segment, index) => {
+        const kind = agentStateKind(segment.state)
+        const { left, width } = segmentGeometry(segment, range, now)
+        const label = stateWord(segment.state)
+        const showLabel = labelWidth !== undefined && (width / 100) * labelWidth >= SEGMENT_LABEL_MIN_PX
+        return (
+          <span
+            key={`${row.id}:${index}:${segment.start}`}
+            className={css.runDashboardSegment}
+            data-segment-state={kind}
+            data-segment-open={segment.end === undefined ? 'true' : undefined}
+            style={{ left: `${left}%`, width: `${width}%` }}
+            title={label}
+          >
+            {showLabel ? label : ''}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
+/** The mark/word/tint key of a row: the state kind, or the row kind for
+ * stateless rows (diagnostic entries, catalog-only agents). */
+function agentMarkKind(row: TimelineDisplayRow): string {
+  return row.state === undefined ? row.kind : agentStateKind(row.state)
+}
+
+/**
+ * Attention tier of a state kind. Drives the colour of the right-hand status
+ * text and whether the state word is spelled out on the row at all: settled
+ * states ("silent") keep only the mark + duration, with the word demoted to
+ * the tooltip and an sr-only span.
+ */
+function statusTier(kind: string): 'active' | 'attention' | 'error' | 'muted' {
+  switch (kind) {
+    case 'provisioning':
+    case 'running':
+      return 'active'
+    case 'waiting':
+    case 'interrupted':
+      return 'attention'
+    case 'errored':
+      return 'error'
+    default:
+      return 'muted'
+  }
+}
+
+/** Settled states whose word lives in the tooltip, not on the row. */
+function statusWordSilent(kind: string): boolean {
+  return kind === 'completed' || kind === 'cold' || kind === 'closed'
+}
+
+/**
+ * Status as a distinct SHAPE per state (filled/dashed/hollow dot, check,
+ * cross, pause, slash, dashed square), so a greyscale screenshot or a
+ * colour-blind reader still tells every state apart; colour only reinforces.
+ */
+function AgentStateMark(props: { row: TimelineDisplayRow }) {
+  const kind = agentMarkKind(props.row)
+  let glyph: React.ReactNode = null
+  if (kind === 'completed') {
+    glyph = (
+      <svg width="11" height="11" viewBox="0 0 12 12">
+        <path d="M2 6.5 L4.8 9.2 L10 3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    )
+  } else if (kind === 'errored') {
+    glyph = (
+      <svg width="10" height="10" viewBox="0 0 10 10">
+        <line x1="1.5" y1="1.5" x2="8.5" y2="8.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        <line x1="8.5" y1="1.5" x2="1.5" y2="8.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+    )
+  } else if (kind === 'interrupted') {
+    glyph = (
+      <svg width="11" height="11" viewBox="0 0 12 12">
+        <circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <line x1="4.5" y1="3.8" x2="4.5" y2="8.2" stroke="currentColor" strokeWidth="1.5" />
+        <line x1="7.5" y1="3.8" x2="7.5" y2="8.2" stroke="currentColor" strokeWidth="1.5" />
+      </svg>
+    )
+  } else if (kind === 'closed') {
+    glyph = (
+      <svg width="11" height="11" viewBox="0 0 12 12">
+        <circle cx="6" cy="6" r="4.6" fill="none" stroke="currentColor" strokeWidth="1.4" />
+        <line x1="2.9" y1="9.1" x2="9.1" y2="2.9" stroke="currentColor" strokeWidth="1.4" />
+      </svg>
+    )
+  } else if (kind === 'diagnostic' || kind === 'agent' || kind === 'root') {
+    glyph = (
+      <svg width="11" height="11" viewBox="0 0 12 12">
+        <rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="none" stroke="currentColor" strokeWidth="1.3" strokeDasharray="2.5 1.8" />
+      </svg>
+    )
+  }
+  return (
+    <span className={css.runDashboardMark} data-shape={kind} aria-hidden="true">
+      {glyph}
+    </span>
+  )
+}
+
+function RunDashboardTreeRow(props: {
+  row: TimelineDisplayRow
+  /** Draw the per-row spark strip (the list layout has no shared canvas). */
+  range: TimelineDisplay['range'] | undefined
+  now: number
+  /** The tree's dominant model label: an identical model stays off the row. */
+  baselineModel: string | undefined
+  /** Whether this row's action buttons are revealed (click-toggled). */
+  actionsOpen: boolean
+  onToggleActions: (row: TimelineDisplayRow) => void
+  selectedAgentId: string | undefined
+  locatedOwnerId: string | undefined
+  armedCloseId: string | undefined
+  controlState: AgentControlState
+  onOpenAgent: (row: TimelineDisplayRow) => void
+  onSelectAgent: (agentSessionId: string) => void
+  onInterruptAgent: (row: TimelineDisplayRow) => void
+  onCloseAgent: (row: TimelineDisplayRow) => void
+}) {
+  const {
+    row,
+    range,
+    now,
+    baselineModel,
+    actionsOpen,
+    onToggleActions,
+    selectedAgentId,
+    locatedOwnerId,
+    armedCloseId,
+    controlState,
+    onOpenAgent,
+    onSelectAgent,
+    onInterruptAgent,
+    onCloseAgent,
+  } = props
+  const rowControl = controlState.kind !== 'idle' && controlState.agentSessionId === row.id
+    ? controlState
+    : undefined
+  const closeArmed = armedCloseId === row.id
+  const active = formatDuration(row.activeDurationMs, t)
+  const segments = t('runDashboardSegmentCount', { count: row.segments.length })
+  const durationTitle = t('runDashboardDurationSummary', {
+    active,
+    wall: formatDuration(row.wallDurationMs, t),
+    segments,
+  })
+  const kind = agentMarkKind(row)
+  const word = agentRowState(row)
+  const silent = statusWordSilent(kind)
+  // The path lives in the title tooltip (the title IS the leaf); the meta
+  // line only spells a model that deviates from the tree's dominant one.
+  const model = row.model === undefined ? undefined : modelLabel(row.model)
+  const meta = model !== undefined && model !== baselineModel ? model : ''
+  const span = row.kind === 'diagnostic'
+    ? t('runDashboardTimeUnavailable')
+    : `${formatTime(row.startedAt)} → ${row.endedAt === undefined ? t('runDashboardRunning') : formatTime(row.endedAt)}`
+      + ` · ${t('runDashboardWallDuration')} ${formatDuration(row.wallDurationMs, t)} · ${segments}`
+  const canInterrupt = canInterruptAgent(row)
+  const canClose = canCloseAgent(row)
+
+  return (
+    <div
+      role="row"
+      aria-level={row.depth + 1}
+      className={clsx(
+        css.runDashboardRow,
+        row.kind === 'root' && css.runDashboardRootRow,
+        row.kind === 'agent' && css.runDashboardClickableRow,
+        row.contextOnly && css.runDashboardContextRow,
+        locatedOwnerId === row.id && css.runDashboardOwnerLocated,
+      )}
+      data-run-dashboard-row-id={row.id}
+      data-owner-highlighted={locatedOwnerId === row.id ? 'true' : undefined}
+      data-actions-open={actionsOpen ? 'true' : undefined}
+      style={{ '--run-depth': row.depth } as CSSProperties}
+      onClick={row.kind === 'agent' ? () => { onToggleActions(row) } : undefined}
+    >
+      <span className={css.runDashboardRowHeader}>
+        <AgentStateMark row={row} />
+        <span
+          className={css.runDashboardRowTitle}
+          title={row.path === undefined || row.path === '' ? row.title : `${row.title} · ${row.path}`}
+        >
+          {row.title}
+        </span>
+        {row.longRunning && <span className={css.runDashboardWarn}>{t('runDashboardLongRunning')}</span>}
+        <span
+          className={css.runDashboardRowStatus}
+          data-status-tier={statusTier(kind)}
+          title={silent ? `${word} · ${durationTitle}` : durationTitle}
+        >
+          <span className={css.runDashboardSrOnly}>{t('runDashboardActiveDuration')} </span>
+          {row.kind === 'diagnostic' ? word : silent ? active : `${word} · ${active}`}
+          {silent && <span className={css.runDashboardSrOnly}> {word}</span>}
+        </span>
+        {row.kind === 'agent' && (
+          <span
+            className={css.runDashboardActions}
+            role="group"
+            aria-label={t('runDashboardAgentActions', { title: row.title })}
+            onClick={(event) => { event.stopPropagation() }}
+          >
+            <button
+              type="button"
+              className={clsx(css.runDashboardActionButton, css.runDashboardActionPrimary)}
+              aria-label={`${t('runDashboardOpenChat')} ${row.title}`}
+              onClick={() => { onOpenAgent(row) }}
+            >
+              {t('runDashboardOpenChat')}
+            </button>
+            <button
+              type="button"
+              className={clsx(css.runDashboardActionButton, selectedAgentId === row.id && css.runDashboardActionActive)}
+              aria-label={`${t('runDashboardDetails')} ${row.title}`}
+              aria-pressed={selectedAgentId === row.id}
+              onClick={() => { onSelectAgent(row.id) }}
+            >
+              {t('runDashboardDetails')}
+            </button>
+            {(canInterrupt || canClose) && (
+              <span className={css.runDashboardActionsDanger}>
+                {canInterrupt && (
+                  <button
+                    type="button"
+                    className={css.runDashboardActionButton}
+                    aria-label={`${t('runDashboardInterrupt')} ${row.title}`}
+                    disabled={rowControl?.kind === 'loading'}
+                    onClick={() => { onInterruptAgent(row) }}
+                  >
+                    {t('runDashboardInterrupt')}
+                  </button>
+                )}
+                {canClose && (
+                  <button
+                    type="button"
+                    className={clsx(css.runDashboardActionButton, closeArmed && css.runDashboardDangerButton)}
+                    aria-label={`${closeArmed ? t('runDashboardConfirmClose') : t('runDashboardCloseAgent')} ${row.title}`}
+                    disabled={rowControl?.kind === 'loading'}
+                    onClick={() => { onCloseAgent(row) }}
+                  >
+                    {closeArmed ? t('runDashboardConfirmClose') : t('runDashboardCloseAgent')}
+                  </button>
+                )}
+              </span>
+            )}
+          </span>
+        )}
+      </span>
+      {range !== undefined && (
+        <TimelineBars
+          row={row}
+          range={range}
+          now={now}
+          className={css.runDashboardSpark}
+        />
+      )}
+      <span className={css.runDashboardRowMeta}>
+        {meta !== '' && <span className={css.runDashboardMeta} title={meta}>{meta}</span>}
+        <span className={css.runDashboardRowSpan} title={span}>{span}</span>
+      </span>
+      {rowControl !== undefined && (
+        <span className={clsx(
+          css.runDashboardControlResult,
+          rowControl.kind === 'error' && css.runDashboardControlError,
+        )} role="status" aria-live="polite">
+          {rowControl.kind === 'loading'
+            ? t('loading')
+            : agentControlOutcomeLabel(rowControl.action, rowControl.outcome)}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Keep every gantt lane exactly as tall as its tree row. The two live in
+ * separate scroll columns, so nothing but equal heights aligns them — and row
+ * height is content-driven (locale, wrapped actions, a control result), which
+ * a fixed height would silently desync. Environments without ResizeObserver
+ * (jsdom) fall back to the CSS min-height both sides share.
+ */
+function useLaneHeights(
+  treeRef: React.RefObject<HTMLDivElement | null>,
+  rowKey: string,
+): Record<string, number> {
+  const [heights, setHeights] = useState<Record<string, number>>({})
+  useEffect(() => {
+    const tree = treeRef.current
+    if (tree === null || typeof ResizeObserver === 'undefined') return
+    const measure = (): void => {
+      const next: Record<string, number> = {}
+      for (const element of tree.querySelectorAll<HTMLElement>('[data-run-dashboard-row-id]')) {
+        const id = element.dataset.runDashboardRowId
+        if (id !== undefined) next[id] = element.offsetHeight
+      }
+      setHeights(current => {
+        const keys = Object.keys(next)
+        const same = keys.length === Object.keys(current).length
+          && keys.every(id => current[id] === next[id])
+        return same ? current : next
+      })
+    }
+    // Lanes never feed back into row height, so this observer cannot loop.
+    const observer = new ResizeObserver(measure)
+    observer.observe(tree)
+    for (const element of tree.querySelectorAll<HTMLElement>('[data-run-dashboard-row-id]')) {
+      observer.observe(element)
+    }
+    measure()
+    return () => { observer.disconnect() }
+  }, [treeRef, rowKey])
+  return heights
+}
+
+function RunDashboardRows(props: {
+  display: TimelineDisplay
+  now: number
+  zoom: number
+  scrollerRef: React.RefObject<HTMLDivElement>
+  treeWidth: number
+  maxTreeWidth: number
+  setTreeWidth: (width: number) => void
+  openActionsId: string | undefined
+  onToggleActions: (row: TimelineDisplayRow) => void
+  selectedAgentId: string | undefined
+  locatedOwnerId: string | undefined
+  onSelectAgent: (agentSessionId: string) => void
+  armedCloseId: string | undefined
+  controlState: AgentControlState
+  onOpenAgent: (row: TimelineDisplayRow) => void
+  onInterruptAgent: (row: TimelineDisplayRow) => void
+  onCloseAgent: (row: TimelineDisplayRow) => void
+}) {
+  const {
+    display,
+    now,
+    zoom,
+    scrollerRef,
+    treeWidth,
+    maxTreeWidth,
+    setTreeWidth,
+    openActionsId,
+    onToggleActions,
+    selectedAgentId,
+    locatedOwnerId,
+    onSelectAgent,
+    armedCloseId,
+    controlState,
+    onOpenAgent,
+    onInterruptAgent,
+    onCloseAgent,
+  } = props
+  const width = timelineWidth(zoom)
+  const range = display.range
+  const dragStartRef = useRef<{ x: number; width: number } | null>(null)
+  const treeRef = useRef<HTMLDivElement>(null)
+  const laneHeights = useLaneHeights(treeRef, display.rows.map(row => row.id).join('\u0000'))
+  const baselineModel = useMemo(() => dominantModelLabel(display.rows), [display.rows])
+  const ticks = useMemo(() => timelineTicks(range, width), [range, width])
+  const tickStep = ticks.length > 1 ? ticks[1]!.time - ticks[0]!.time : 60_000
+
+  const setClampedTreeWidth = useCallback((next: number): void => {
+    setTreeWidth(Math.min(maxTreeWidth, Math.max(RUN_DASHBOARD_TREE_MIN, Math.round(next))))
+  }, [maxTreeWidth, setTreeWidth])
+
+  useEffect(() => {
+    const onMove = (event: PointerEvent): void => {
+      const start = dragStartRef.current
+      if (start === null) return
+      setClampedTreeWidth(start.width + event.clientX - start.x)
+    }
+    const onUp = (): void => {
+      dragStartRef.current = null
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+  }, [setClampedTreeWidth])
+
+  return (
+    <div className={css.runDashboardGrid} role="treegrid" aria-label={t('subagent')}>
+      <div className={css.runDashboardTree} style={{ width: treeWidth }} ref={treeRef}>
+        <div className={css.runDashboardTreeHead} aria-hidden="true" />
+        {display.rows.map(row => (
+          <RunDashboardTreeRow
+            key={row.id}
+            row={row}
+            range={undefined}
+            now={now}
+            baselineModel={baselineModel}
+            actionsOpen={openActionsId === row.id}
+            onToggleActions={onToggleActions}
+            selectedAgentId={selectedAgentId}
+            locatedOwnerId={locatedOwnerId}
+            armedCloseId={armedCloseId}
+            controlState={controlState}
+            onOpenAgent={onOpenAgent}
+            onSelectAgent={onSelectAgent}
+            onInterruptAgent={onInterruptAgent}
+            onCloseAgent={onCloseAgent}
+          />
+        ))}
+      </div>
+      <div
+        role="separator"
+        tabIndex={0}
+        aria-orientation="vertical"
+        aria-valuemin={RUN_DASHBOARD_TREE_MIN}
+        aria-valuemax={maxTreeWidth}
+        aria-valuenow={treeWidth}
+        className={css.runDashboardSplitter}
+        onPointerDown={(event) => {
+          event.preventDefault()
+          event.currentTarget.setPointerCapture?.(event.pointerId)
+          dragStartRef.current = { x: event.clientX, width: treeWidth }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowLeft') {
+            event.preventDefault()
+            setClampedTreeWidth(treeWidth - TREE_KEYBOARD_STEP)
+          } else if (event.key === 'ArrowRight') {
+            event.preventDefault()
+            setClampedTreeWidth(treeWidth + TREE_KEYBOARD_STEP)
+          }
+        }}
+      />
+      <div className={css.runDashboardTimeline} data-timeline-scroller ref={scrollerRef}>
+        <div
+          className={css.runDashboardCanvas}
+          data-timeline-canvas
+          data-timeline-width={width}
+          data-timeline-range-ms={range === null ? undefined : range.end - range.start}
+          style={{ width }}
+        >
+          <div className={css.runDashboardScale} aria-hidden="true">
+            {ticks.map(tick => (
+              <span
+                key={tick.time}
+                className={css.runDashboardTick}
+                data-timeline-tick
+                style={{ left: `${tick.ratio * 100}%` }}
+              >
+                {formatTick(tick.time, tickStep)}
+              </span>
+            ))}
+          </div>
+          <div className={css.runDashboardLanes}>
+            {ticks.map(tick => (
+              <span
+                key={tick.time}
+                className={css.runDashboardGridline}
+                data-timeline-gridline
+                style={{ left: `${tick.ratio * 100}%` }}
+                aria-hidden="true"
+              />
+            ))}
+            {display.rows.map(row => (
+              <div
+                key={row.id}
+                className={clsx(css.runDashboardLane, locatedOwnerId === row.id && css.runDashboardOwnerLocated)}
+                data-run-dashboard-lane-id={row.id}
+                data-owner-highlighted={locatedOwnerId === row.id ? 'true' : undefined}
+                style={laneHeights[row.id] === undefined ? undefined : { height: laneHeights[row.id] }}
+              >
+                <TimelineBars
+                  row={row}
+                  range={range}
+                  now={now}
+                  labelWidth={width}
+                  className={css.runDashboardLaneBars}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The narrow layout: no side-by-side canvas, but every row keeps its spark
+ * strip on the SHARED range, so spans stay comparable and each row still
+ * shows its duration at a glance. Also the mobile fallback.
+ */
+function RunDashboardList(props: {
+  display: TimelineDisplay
+  now: number
+  openActionsId: string | undefined
+  onToggleActions: (row: TimelineDisplayRow) => void
+  selectedAgentId: string | undefined
+  locatedOwnerId: string | undefined
+  onSelectAgent: (agentSessionId: string) => void
+  armedCloseId: string | undefined
+  controlState: AgentControlState
+  onOpenAgent: (row: TimelineDisplayRow) => void
+  onInterruptAgent: (row: TimelineDisplayRow) => void
+  onCloseAgent: (row: TimelineDisplayRow) => void
+}) {
+  const baselineModel = useMemo(() => dominantModelLabel(props.display.rows), [props.display.rows])
+  return (
+    <div data-run-dashboard-list className={css.runDashboardList} role="treegrid" aria-label={t('subagent')}>
+      {props.display.rows.map(row => (
+        <RunDashboardTreeRow
+          key={row.id}
+          row={row}
+          range={props.display.range}
+          now={props.now}
+          baselineModel={baselineModel}
+          actionsOpen={props.openActionsId === row.id}
+          onToggleActions={props.onToggleActions}
+          selectedAgentId={props.selectedAgentId}
+          locatedOwnerId={props.locatedOwnerId}
+          armedCloseId={props.armedCloseId}
+          controlState={props.controlState}
+          onOpenAgent={props.onOpenAgent}
+          onSelectAgent={props.onSelectAgent}
+          onInterruptAgent={props.onInterruptAgent}
+          onCloseAgent={props.onCloseAgent}
+        />
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Free text and status always fit on one line; the narrower filters live in
+ * a disclosure so a 360px sidebar never shows five 55px stubs. Collapsed is
+ * NOT hidden — every input stays mounted and labelled, and the summary
+ * counts what is currently narrowing the tree.
+ */
+function RunDashboardFilters(props: {
+  filters: TimelineDisplayFilters
+  onChange: (filters: TimelineDisplayFilters) => void
+}) {
+  const { filters, onChange } = props
+  const set = (patch: TimelineDisplayFilters): void => {
+    onChange({ ...filters, ...patch })
+  }
+  const activeCount = countActiveFilters(filters)
+  return (
+    <div className={css.runDashboardFilters} role="group" aria-label={t('runDashboardFilterGroup')}>
+      <div className={css.runDashboardFilterRow}>
+        <input
+          className={css.runDashboardFilterSearch}
+          aria-label={t('runDashboardFilterText')}
+          value={filters.text ?? ''}
+          placeholder={t('runDashboardFilterText')}
+          onInput={(event) => { set({ text: event.currentTarget.value }) }}
+          onChange={(event) => { set({ text: event.currentTarget.value }) }}
+        />
+        <select
+          aria-label={t('runDashboardFilterState')}
+          value={filters.state ?? 'all'}
+          onChange={(event) => { set({ state: event.currentTarget.value }) }}
+        >
+          {STATE_FILTER_OPTIONS.map(value => (
+            <option key={value} value={value}>{stateFilterLabel(value)}</option>
+          ))}
+        </select>
+      </div>
+      <details className={css.runDashboardFilterMore} data-filters-active={activeCount}>
+        <summary className={css.runDashboardFilterSummary}>
+          <span>{t('runDashboardMoreFilters')}</span>
+          {activeCount > 0 && (
+            <span className={css.runDashboardFilterBadge}>
+              {t('runDashboardFiltersActive', { count: activeCount })}
+            </span>
+          )}
+        </summary>
+        <div className={css.runDashboardFilterGrid}>
+          <input
+            aria-label={t('runDashboardFilterModel')}
+            value={filters.model ?? ''}
+            placeholder={t('runDashboardFilterModel')}
+            onInput={(event) => { set({ model: event.currentTarget.value }) }}
+            onChange={(event) => { set({ model: event.currentTarget.value }) }}
+          />
+          <input
+            aria-label={t('runDashboardFilterPath')}
+            value={filters.path ?? ''}
+            placeholder={t('runDashboardFilterPath')}
+            onInput={(event) => { set({ path: event.currentTarget.value }) }}
+            onChange={(event) => { set({ path: event.currentTarget.value }) }}
+          />
+          <label className={css.runDashboardCheck}>
+            <input
+              aria-label={t('runDashboardFilterLongRunning')}
+              type="checkbox"
+              checked={filters.longRunningOnly === true}
+              onChange={(event) => { set({ longRunningOnly: event.currentTarget.checked }) }}
+            />
+            <span>{t('runDashboardFilterLongRunning')}</span>
+          </label>
+        </div>
+      </details>
+    </div>
+  )
+}
+
+function AgentDetailPanel(props: {
+  state: AgentDetailLoadState
+  /** The agent's display title, so the dock says WHOSE detail it shows. */
+  agentTitle: string | undefined
+  onRetry: (agentSessionId: string) => void
+  onClose: () => void
+}) {
+  const { state, agentTitle, onRetry, onClose } = props
+  if (state.kind === 'idle') return null
+  const agentSessionId = state.agentSessionId
+  const heading = agentTitle === undefined || agentTitle === ''
+    ? t('runDashboardDetailTitle')
+    : `${t('runDashboardDetailTitle')} · ${agentTitle}`
+  return (
+    <section className={css.runDashboardDetail} aria-label={heading}>
+      <div className={css.runDashboardDetailHeader}>
+        <span title={heading}>{heading}</span>
+        <button type="button" className={css.runDashboardDetailClose} aria-label={t('runDashboardCloseDetails')} onClick={onClose}>
+          <IconStopOutline16 size={10} />
+        </button>
+      </div>
+      {state.kind === 'loading' && <div className={css.runDashboardDetailHint}>{t('loading')}</div>}
+      {state.kind === 'error' && (
+        <div className={css.runDashboardDetailError}>
+          <span>{t('runDashboardDetailError')}: {state.message}</span>
+          <button type="button" onClick={() => { onRetry(agentSessionId) }}>{t('retry')}</button>
+        </div>
+      )}
+      {state.kind === 'ready' && (
+        <>
+          <div className={css.runDashboardDetailSection}>
+            <span className={css.runDashboardDetailLabel}>{t('runDashboardDetailTask')}</span>
+            {state.detail.initialTask.available
+              ? <pre className={css.runDashboardTask}>{state.detail.initialTask.text}</pre>
+              : <div className={css.runDashboardDetailHint}>{initialTaskUnavailableLabel(state.detail.initialTask.reason)}</div>}
+          </div>
+          <div className={css.runDashboardDetailSection}>
+            <span className={css.runDashboardDetailLabel}>{t('runDashboardDetailProperties')}</span>
+            <dl className={css.runDashboardProps}>
+              {detailProperties(state.detail).map(([label, value]) => (
+                <Fragment key={label}>
+                  <dt>{label}</dt><dd>{value}</dd>
+                </Fragment>
+              ))}
+            </dl>
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+/**
+ * The sidebar's Run Dashboard page. The tab's internal id stays `subagent`,
+ * but the body now renders a recoverable root+descendant tree-gantt from the
+ * host timeline API; legacy last-text/tool history polling is not mounted.
  */
 export function SubagentView(props: {
   sessionId: string
   active: boolean
   ctx: Context
+  store?: SidebarStore
   onOpenChild?: (address: SidebarSubagentAddress) => void
 }) {
-  const { sessionId, active, ctx, onOpenChild } = props
+  const { sessionId, active, ctx, store, onOpenChild } = props
   const sessions = ctx.sessions
+  const [loadState, setLoadState] = useState<TimelineLoadState>({ kind: 'idle' })
+  const [detailState, setDetailState] = useState<AgentDetailLoadState>({ kind: 'idle' })
+  const [openActionsId, setOpenActionsId] = useState<string | undefined>(undefined)
+  const [selectedJobId, setSelectedJobId] = useState<string | undefined>(undefined)
+  const [controlState, setControlState] = useState<AgentControlState>({ kind: 'idle' })
+  const [armedCloseId, setArmedCloseId] = useState<string | undefined>(undefined)
+  const [locatedOwnerId, setLocatedOwnerId] = useState<string | undefined>(undefined)
+  const [filters, setFilters] = useState<TimelineDisplayFilters>({ state: 'all' })
+  const [now, setNow] = useState(() => Date.now())
+  const [zoom, setZoom] = useState(1)
+  const [localTreeWidth, setLocalTreeWidth] = useState(() => defaultRunDashboardTreeWidth(PANEL_DEFAULT))
+  const appliedSeqRef = useRef<number | undefined>(undefined)
+  const requestRef = useRef<AbortController | undefined>(undefined)
+  const detailRequestRef = useRef<AbortController | undefined>(undefined)
+  const zoomFrameRef = useRef<number | undefined>(undefined)
+  const scrollerRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
 
-  // The same list feed the official catalog consumes (byId lineage + the
-  // lazy per-parent catalogs). Older DSH snapshots without the subagent seam
-  // simply leave these surfaces empty — the page degrades to the empty state.
   const list = useSyncExternalStore(
     useMemo(() => (callback: () => void) => sessions.list.subscribe(callback), [sessions]),
     useCallback(() => sessions.list.getSnapshot(), [sessions]),
   )
+  const storeSnapshot = useSyncExternalStore(
+    useMemo(() => store?.subscribe.bind(store) ?? (() => () => {}), [store]),
+    useCallback(() => store?.getSnapshot(), [store]),
+  )
+
   const byId = list.byId
   const catalogs = list.subagentsByParent ?? {}
-
-  // The topology root: the main agent of the current session's tree.
   const rootId = useMemo(() => rootAncestor(byId, sessionId), [byId, sessionId])
-  const rootCatalog = rootId === undefined ? undefined : catalogs[rootId]
   const rootSummary = rootId === undefined ? undefined : byId[rootId]
-  const live = useSubagentLive(rootId, active)
+  const signature = useMemo(
+    () => catalogSignature(rootId, catalogs, byId),
+    [rootId, catalogs, byId],
+  )
+  const panelWidth = storeSnapshot?.state?.width ?? PANEL_DEFAULT
+  const layout = useDashboardLayout(bodyRef, panelWidth)
+  const maxTreeWidth = Math.max(RUN_DASHBOARD_TREE_MIN, Math.round(panelWidth) - RUN_DASHBOARD_TREE_MIN)
+  const rawTreeWidth = storeSnapshot?.state?.runDashboardTreeWidth ?? localTreeWidth
+  const treeWidth = clampRunDashboardTreeWidth(rawTreeWidth, panelWidth)
+  const longRunningMinutes = normalizeLongRunningMinutes(storeSnapshot?.prefs.pluginSettings.subagent?.longRunningMinutes)
 
-  /** Catalog owners currently consuming live membership updates. */
-  const observedRef = useRef(new Set<string>())
-
-  const observe = useCallback((parentSessionId: string, open: boolean): void => {
-    sessions.setSubagentCatalogOpen?.(parentSessionId, open)
-    if (open) observedRef.current.add(parentSessionId)
-    else observedRef.current.delete(parentSessionId)
-  }, [sessions])
-
-  // While the page is visible the topology root consumes live membership; a
-  // root change (switching to another main agent's tree) or the page hiding
-  // (tab switched away / panel collapsed) releases everything observed.
   useEffect(() => {
-    if (rootId === undefined || !active) return
-    observe(rootId, true)
-    return () => {
-      for (const parentSessionId of observedRef.current) {
-        sessions.setSubagentCatalogOpen?.(parentSessionId, false)
-      }
-      observedRef.current.clear()
-    }
-  }, [rootId, active, observe, sessions])
+    appliedSeqRef.current = undefined
+    detailRequestRef.current?.abort()
+    setDetailState({ kind: 'idle' })
+    setOpenActionsId(undefined)
+    setSelectedJobId(undefined)
+    setControlState({ kind: 'idle' })
+    setArmedCloseId(undefined)
+    setLocatedOwnerId(undefined)
+    setLoadState(rootId === undefined ? { kind: 'idle' } : { kind: 'loading' })
+  }, [rootId])
 
-  // Every branch of the always-expanded topology consumes live membership
-  // (add-only: a branch stays observed until the root changes or the page
-  // hides, which releases the whole set via the root effect's cleanup).
-  const branches = useMemo(() => collectBranchIds(catalogs, rootId), [catalogs, rootId])
+  useEffect(() => {
+    if (armedCloseId === undefined) return
+    const timer = window.setTimeout(() => { setArmedCloseId(undefined) }, AGENT_CLOSE_ARM_MS)
+    return () => { window.clearTimeout(timer) }
+  }, [armedCloseId])
+
+  const loadAgentDetail = useCallback((agentSessionId: string): void => {
+    if (!active || rootId === undefined) return
+    detailRequestRef.current?.abort()
+    const controller = new AbortController()
+    detailRequestRef.current = controller
+    // The detail panel and the job output pane share the bottom dock.
+    setSelectedJobId(undefined)
+    setDetailState({ kind: 'loading', agentSessionId })
+    void api.agentDetail(
+      { sessionId: rootId, cwd: rootSummary?.cwd },
+      agentSessionId,
+      controller.signal,
+    ).then((detail) => {
+      if (!controller.signal.aborted) setDetailState({ kind: 'ready', agentSessionId, detail })
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return
+      const message = error instanceof Error ? error.message : String(error)
+      setDetailState({ kind: 'error', agentSessionId, message })
+    })
+  }, [active, rootId, rootSummary?.cwd])
+
+  const closeAgentDetail = useCallback((): void => {
+    detailRequestRef.current?.abort()
+    setDetailState({ kind: 'idle' })
+  }, [])
+
+  useEffect(() => () => { detailRequestRef.current?.abort() }, [])
+  const cancelZoomFrame = useCallback((): void => {
+    if (zoomFrameRef.current !== undefined) window.cancelAnimationFrame(zoomFrameRef.current)
+    zoomFrameRef.current = undefined
+  }, [])
+  useEffect(() => () => { cancelZoomFrame() }, [cancelZoomFrame])
+
+  const toggleAgentDetail = useCallback((agentSessionId: string): void => {
+    if (detailState.kind !== 'idle' && detailState.agentSessionId === agentSessionId) {
+      closeAgentDetail()
+      return
+    }
+    loadAgentDetail(agentSessionId)
+  }, [closeAgentDetail, detailState, loadAgentDetail])
+
+  const openAgent = useCallback((row: TimelineDisplayRow): void => {
+    const address = agentAddress(row)
+    if (address === undefined) return
+    onOpenChild?.(address)
+    if (onOpenChild === undefined) ctx.sessions.openSubagent?.(address)
+  }, [ctx.sessions, onOpenChild])
+
+  const runAgentControl = useCallback(async (
+    action: AgentControlAction,
+    row: TimelineDisplayRow,
+  ): Promise<void> => {
+    const address = rootScopedControlAddress(rootId, row)
+    if (address === undefined) {
+      setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'not-found' })
+      return
+    }
+    setArmedCloseId(undefined)
+    setControlState({ kind: 'loading', agentSessionId: row.id, action })
+    try {
+      let outcome: SidebarSubagentControlOutcome
+      if (action === 'interrupt') {
+        const interrupt = ctx.sessions.interruptSubagent
+        if (interrupt === undefined) {
+          setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'failed' })
+          return
+        }
+        outcome = await interrupt(address)
+      } else {
+        const close = ctx.sessions.closeSubagent
+        if (close === undefined) {
+          setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'failed' })
+          return
+        }
+        outcome = await close(address, operationId())
+      }
+      setControlState({
+        kind: outcome === 'accepted' || outcome === 'closed' ? 'done' : 'error',
+        agentSessionId: row.id,
+        action,
+        outcome,
+      })
+    } catch {
+      setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'failed' })
+    }
+  }, [ctx.sessions, rootId])
+
+  const interruptAgent = useCallback((row: TimelineDisplayRow): void => {
+    void runAgentControl('interrupt', row)
+  }, [runAgentControl])
+
+  const closeAgent = useCallback((row: TimelineDisplayRow): void => {
+    if (armedCloseId !== row.id) {
+      setArmedCloseId(row.id)
+      return
+    }
+    void runAgentControl('close', row)
+  }, [armedCloseId, runAgentControl])
+
+  const setTreeWidth = useCallback((width: number): void => {
+    if (storeSnapshot?.state !== undefined && store !== undefined) {
+      store.update((draft) => {
+        draft.runDashboardTreeWidth = clampRunDashboardTreeWidth(width, draft.width)
+      })
+    } else {
+      setLocalTreeWidth(clampRunDashboardTreeWidth(width, panelWidth))
+    }
+  }, [store, storeSnapshot?.state, panelWidth])
+
+  const fetchTimeline = useCallback((): void => {
+    if (!active || rootId === undefined) return
+    requestRef.current?.abort()
+    const controller = new AbortController()
+    requestRef.current = controller
+    setLoadState(current => current.kind === 'ready' ? current : { kind: 'loading' })
+    void api.agentTimeline(
+      { sessionId: rootId, cwd: rootSummary?.cwd },
+      controller.signal,
+    ).then((timeline) => {
+      if (controller.signal.aborted) return
+      if (appliedSeqRef.current !== undefined && timeline.asOfSeq < appliedSeqRef.current) return
+      appliedSeqRef.current = timeline.asOfSeq
+      setLoadState({ kind: 'ready', timeline })
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return
+      const message = error instanceof Error ? error.message : String(error)
+      setLoadState(current => current.kind === 'ready' ? current : { kind: 'error', message })
+    })
+  }, [active, rootId, rootSummary?.cwd])
+
+  useEffect(() => {
+    fetchTimeline()
+    return () => { requestRef.current?.abort() }
+  }, [fetchTimeline, signature])
+
   useEffect(() => {
     if (!active) return
-    for (const id of branches) {
-      if (!observedRef.current.has(id)) observe(id, true)
-    }
-  }, [branches, active, observe])
+    const timer = window.setInterval(() => { setNow(Date.now()) }, 1_000)
+    return () => { window.clearInterval(timer) }
+  }, [active])
 
-  // Unobserve everything on unmount (the host stops refreshing unused catalogs).
-  useEffect(() => () => {
-    for (const parentSessionId of observedRef.current) {
-      sessions.setSubagentCatalogOpen?.(parentSessionId, false)
-    }
-    observedRef.current.clear()
-  }, [sessions])
-
-  const openChild = useCallback((address: SidebarSubagentAddress): void => {
-    // Notify the shell first: the jump switches the sidebar to the child
-    // session's own layout, and the shell re-opens the Subagent page on top
-    // of it (the topology stays rooted at the main agent with the child
-    // highlighted) — the README "page stays open" contract.
-    onOpenChild?.(address)
-    try {
-      sessions.openSubagent?.(address)
-    } catch (error) {
-      console.warn('[dsh-better-sidebar] openSubagent failed:', error)
-    }
-  }, [sessions, onOpenChild])
-
-  /** Jump back to the main agent (the topology root) from its node. */
-  const openMain = useCallback((): void => {
-    if (rootId === undefined) return
-    try {
-      sessions.open?.(rootId)
-    } catch (error) {
-      console.warn('[dsh-better-sidebar] open session failed:', error)
-    }
-  }, [sessions, rootId])
-
-  const refresh = useCallback((parentSessionId: string): void => {
-    void sessions.refreshSubagents?.(parentSessionId)
-  }, [sessions])
-
-  const totals = useMemo(
-    () => rootId === undefined
-      ? { count: 0, runningCount: 0 }
-      : countSubagentDescendants(byId, rootId),
-    [byId, rootId],
+  const display = useMemo(
+    () => loadState.kind === 'ready'
+      ? buildTimelineDisplay({
+        timeline: loadState.timeline,
+        catalogs,
+        rootTitle: rootSummary?.displayTitle,
+        rootRunning: rootSummary?.running,
+        now,
+        longRunningMinutes,
+      })
+      : undefined,
+    [loadState, catalogs, rootSummary?.displayTitle, rootSummary?.running, now, longRunningMinutes],
   )
-  // Session summaries can announce membership before the descriptor-backed
-  // catalog catches up (or a catalog that just went ready is still empty).
-  const summaryBackedLoading = rootId !== undefined
-    && (rootCatalog === undefined || (rootCatalog.state === 'ready' && rootCatalog.entries.length === 0))
-    && directChildren(byId, rootId).length > 0
-  const readyEmpty = rootCatalog?.state === 'ready'
-    && rootCatalog.entries.length === 0
-    && directChildren(byId, rootId ?? '').length === 0
-  const countLabel = totals.count === 0
-    ? undefined
-    : totals.runningCount > 0
-      ? t('subagentCountRunning', { count: totals.count, running: totals.runningCount })
-      : t('subagentCount', { count: totals.count })
+  const filteredDisplay = useMemo(
+    () => display === undefined ? undefined : filterTimelineDisplay(display, filters),
+    [display, filters],
+  )
 
-  /** Arrow-key tree navigation over the visible rows (official catalog recipe). */
-  const bodyRef = useRef<HTMLDivElement>(null)
-  const focusAt = useCallback((index: number): void => {
-    const items = bodyRef.current?.querySelectorAll<HTMLElement>(
-      '[role="treeitem"]:not([aria-disabled="true"])',
-    ) ?? []
-    if (items.length === 0) return
-    items[(index + items.length) % items.length]?.focus()
-  }, [])
-  const onTreeKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>): void => {
-    const items = bodyRef.current?.querySelectorAll<HTMLElement>(
-      '[role="treeitem"]:not([aria-disabled="true"])',
-    ) ?? []
-    const index = Array.prototype.indexOf.call(items, document.activeElement)
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      focusAt(index + 1)
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      focusAt(index < 0 ? items.length - 1 : index - 1)
-    } else if (event.key === 'Home') {
-      event.preventDefault()
-      focusAt(0)
-    } else if (event.key === 'End') {
-      event.preventDefault()
-      focusAt(items.length - 1)
+  const zoomBy = useCallback((factor: number): void => {
+    const scroller = scrollerRef.current
+    const oldWidth = timelineWidth(zoom)
+    const anchor = scroller === null ? 0 : scroller.clientWidth / 2
+    const ratio = scroller === null ? 0 : (scroller.scrollLeft + anchor) / oldWidth
+    const nextZoom = Math.min(8, Math.max(0.25, zoom * factor))
+    setZoom(nextZoom)
+    if (scroller !== null) {
+      cancelZoomFrame()
+      zoomFrameRef.current = window.requestAnimationFrame(() => {
+        zoomFrameRef.current = undefined
+        scroller.scrollLeft = Math.max(0, ratio * timelineWidth(nextZoom) - anchor)
+      })
     }
-  }, [focusAt])
+  }, [cancelZoomFrame, zoom])
+  const zoomIn = useCallback((): void => { zoomBy(TIMELINE_ZOOM_FACTOR) }, [zoomBy])
+  const zoomOut = useCallback((): void => { zoomBy(1 / TIMELINE_ZOOM_FACTOR) }, [zoomBy])
+  const fitAll = useCallback((): void => {
+    cancelZoomFrame()
+    setZoom(1)
+    scrollerRef.current?.scrollTo({ left: 0 })
+  }, [cancelZoomFrame])
+  const panRight = useCallback((): void => {
+    cancelZoomFrame()
+    const scroller = scrollerRef.current
+    if (scroller !== null) scroller.scrollLeft += TIMELINE_PAN_STEP
+  }, [cancelZoomFrame])
+  const scrollNow = useCallback((): void => {
+    cancelZoomFrame()
+    const scroller = scrollerRef.current
+    if (scroller !== null) scroller.scrollLeft = timelineWidth(zoom)
+  }, [cancelZoomFrame, zoom])
+
+  const locateJobOwner = useCallback((ownerSessionId: string): void => {
+    setLocatedOwnerId(ownerSessionId)
+    setFilters({ state: 'all' })
+  }, [])
+
+  const selectJob = useCallback((jobId: string | undefined): void => {
+    if (jobId !== undefined) closeAgentDetail()
+    setSelectedJobId(jobId)
+  }, [closeAgentDetail])
+
+  const toggleRowActions = useCallback((row: TimelineDisplayRow): void => {
+    setOpenActionsId(current => (current === row.id ? undefined : row.id))
+  }, [])
+
+  useEffect(() => {
+    if (locatedOwnerId === undefined) return
+    const target = [...(bodyRef.current?.querySelectorAll<HTMLElement>('[data-run-dashboard-row-id]') ?? [])]
+      .find(row => row.dataset.runDashboardRowId === locatedOwnerId)
+    target?.scrollIntoView({ block: 'center', inline: 'nearest' })
+  }, [locatedOwnerId, filters])
+
+  const countLabel = display === undefined
+    ? undefined
+    : t('subagentCount', { count: Math.max(0, display.rows.length - 1) })
 
   return (
     <div className={css.subagent}>
@@ -798,84 +1630,100 @@ export function SubagentView(props: {
           aria-label={t('refresh')}
           title={t('refresh')}
           disabled={rootId === undefined}
-          onClick={() => { if (rootId !== undefined) refresh(rootId) }}
+          onClick={fetchTimeline}
         >
           <IconRefreshOutline14 />
         </button>
       </div>
-      <div
-        ref={bodyRef}
-        className={css.subagentBody}
-        onKeyDown={onTreeKeyDown}
-      >
-        <div
-          role="tree"
-          aria-label={t('subagent')}
-          aria-busy={summaryBackedLoading || undefined}
-        >
-          {rootId !== undefined && rootSummary !== undefined && (
-            <div
-              role="treeitem"
-              tabIndex={0}
-              aria-level={0}
-              aria-label={`${rootSummary.displayTitle !== '' ? rootSummary.displayTitle : t('subagentMainAgent')} ${t('subagentMainAgent')}`}
-              aria-current={rootId === sessionId ? 'true' : undefined}
-              className={clsx(css.subagentRow, rootId === sessionId && css.subagentRowActive)}
-              onClick={openMain}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  openMain()
-                }
-              }}
-            >
-              <StateDot
-                state={rootSummary.running === true ? 'ongoing' : 'done'}
-                className={css.subagentDot}
-              />
-              <span className={css.subagentContent}>
-                <span className={css.subagentLabel}>
-                  {rootSummary.displayTitle !== '' ? rootSummary.displayTitle : t('subagentMainAgent')}
-                </span>
-                <span className={css.subagentSecondary}>
-                  {`${t('subagentMainAgent')} · ${rootSummary.running === true ? t('subagentRunning') : t('subagentInactive')}`}
-                </span>
-              </span>
-            </div>
-          )}
-          {rootId !== undefined && (
-            <div className={css.subagentChildren} role="group" aria-busy={summaryBackedLoading || undefined}>
-              {summaryBackedLoading && (
-                <CatalogLoadingRows parentSessionId={rootId} byId={byId} level={1} />
-              )}
-              {!summaryBackedLoading && (
-                <CatalogRows
-                  parentSessionId={rootId}
-                  catalog={rootCatalog}
-                  catalogs={catalogs}
-                  byId={byId}
-                  level={1}
-                  currentSessionId={sessionId}
-                  live={live}
-                  openChild={openChild}
-                  refresh={refresh}
-                />
-              )}
-            </div>
-          )}
-          {readyEmpty && (
-            <div className={css.subagentEmpty}>
-              <div>{t('subagentEmpty')}</div>
-              <div className={css.subagentEmptyHint}>{t('subagentEmptyDesc')}</div>
-            </div>
-          )}
-        </div>
+      <div className={css.subagentBody} ref={bodyRef}>
+        {layout === 'grid' && (
+          <div className={css.runDashboardToolbar} role="group" aria-label={t('runDashboardViewport')}>
+            <button type="button" aria-label={t('runDashboardZoomIn')} onClick={zoomIn}>{t('runDashboardZoomIn')}</button>
+            <button type="button" aria-label={t('runDashboardZoomOut')} onClick={zoomOut}>{t('runDashboardZoomOut')}</button>
+            <button type="button" aria-label={t('runDashboardFitAll')} onClick={fitAll}>{t('runDashboardFitAll')}</button>
+            <button type="button" aria-label={t('runDashboardNow')} onClick={scrollNow}>{t('runDashboardNow')}</button>
+            <button type="button" aria-label={t('runDashboardPanRight')} onClick={panRight}>{t('runDashboardPanRight')}</button>
+          </div>
+        )}
+        <RunDashboardFilters filters={filters} onChange={setFilters} />
+        {rootId === undefined && (
+          <div className={css.subagentEmpty}>
+            <div>{t('subagentEmpty')}</div>
+            <div className={css.subagentEmptyHint}>{t('subagentEmptyDesc')}</div>
+          </div>
+        )}
+        {loadState.kind === 'loading' && <div className={css.subagentEmpty}>{t('loading')}</div>}
+        {loadState.kind === 'error' && (
+          <div className={css.subagentError}>
+            <span>{loadState.message}</span>
+            <button type="button" className={css.subagentErrorRetry} onClick={fetchTimeline}>
+              <IconRefreshOutline14 />
+              {t('retry')}
+            </button>
+          </div>
+        )}
+        {filteredDisplay !== undefined && filteredDisplay.rows.length === 1 && (
+          <div className={css.subagentEmpty}>
+            <div>{t('subagentEmpty')}</div>
+            <div className={css.subagentEmptyHint}>{t('subagentEmptyDesc')}</div>
+          </div>
+        )}
+        {filteredDisplay !== undefined && (layout === 'list'
+          ? (
+            <RunDashboardList
+              display={filteredDisplay}
+              now={now}
+              openActionsId={openActionsId}
+              onToggleActions={toggleRowActions}
+              selectedAgentId={detailState.kind === 'idle' ? undefined : detailState.agentSessionId}
+              locatedOwnerId={locatedOwnerId}
+              onSelectAgent={toggleAgentDetail}
+              armedCloseId={armedCloseId}
+              controlState={controlState}
+              onOpenAgent={openAgent}
+              onInterruptAgent={interruptAgent}
+              onCloseAgent={closeAgent}
+            />
+          )
+          : (
+            <RunDashboardRows
+              display={filteredDisplay}
+              now={now}
+              zoom={zoom}
+              scrollerRef={scrollerRef}
+              treeWidth={treeWidth}
+              maxTreeWidth={maxTreeWidth}
+              setTreeWidth={setTreeWidth}
+              openActionsId={openActionsId}
+              onToggleActions={toggleRowActions}
+              selectedAgentId={detailState.kind === 'idle' ? undefined : detailState.agentSessionId}
+              locatedOwnerId={locatedOwnerId}
+              onSelectAgent={toggleAgentDetail}
+              armedCloseId={armedCloseId}
+              controlState={controlState}
+              onOpenAgent={openAgent}
+              onInterruptAgent={interruptAgent}
+              onCloseAgent={closeAgent}
+            />
+          ))}
         <JobsSection
           byId={byId}
           jobsBySession={list.jobsBySession}
           rootId={rootId}
+          ownerRows={display?.rows}
+          locatedOwnerId={locatedOwnerId}
+          onLocateOwner={locateJobOwner}
+          selectedJobId={selectedJobId}
+          onSelectJob={selectJob}
           active={active}
+        />
+        <AgentDetailPanel
+          state={detailState}
+          agentTitle={detailState.kind === 'idle'
+            ? undefined
+            : display?.rows.find(row => row.id === detailState.agentSessionId)?.title}
+          onRetry={loadAgentDetail}
+          onClose={closeAgentDetail}
         />
       </div>
     </div>

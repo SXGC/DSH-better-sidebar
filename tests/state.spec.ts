@@ -599,6 +599,29 @@ describe('sidebar state', () => {
     }
   })
 
+  it('sanitize defaults and clamps the run dashboard tree width for old or malformed persisted states', () => {
+    const base = {
+      panelOpen: true,
+      width: 600,
+      nextTerminal: 1,
+      activePane: 'pane:1',
+      expanded: [],
+      splits: {
+        kind: 'leaf',
+        id: 'pane:1',
+        active: null,
+        tabs: [{ id: 't', type: 'subagent', title: 'Run Dashboard' }],
+      },
+    }
+
+    expect(sanitizeState(base)?.runDashboardTreeWidth).toBe(270)
+    expect(sanitizeState({ ...base, runDashboardTreeWidth: 'wide' })?.runDashboardTreeWidth).toBe(270)
+    expect(sanitizeState({ ...base, runDashboardTreeWidth: 40 })?.runDashboardTreeWidth).toBe(128)
+    expect(sanitizeState({ ...base, runDashboardTreeWidth: 999 })?.runDashboardTreeWidth).toBe(472)
+    expect(sanitizeState({ ...base, width: 220, runDashboardTreeWidth: 999 })?.runDashboardTreeWidth).toBe(152)
+    expect(makeDefaultState(600).runDashboardTreeWidth).toBe(270)
+  })
+
   it('tabOpenIn and patchTab see tabs in the bottom tree', () => {
     let s = state()
     s = toggleBottomPanel(s)

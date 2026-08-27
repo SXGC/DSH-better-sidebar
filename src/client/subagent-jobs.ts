@@ -21,6 +21,18 @@ export interface TreeJob {
   job: SidebarJobView
 }
 
+export interface JobOwnerResolution {
+  ownerSessionId: string
+  ownerTitle: string
+  displayTitle: string | undefined
+  linked: boolean
+}
+
+export interface JobOwnerDisplayRow {
+  id: string
+  title: string
+}
+
 /** Whether the registry still holds the job open (its duration ticks). */
 export function isJobLive(job: SidebarJobView): boolean {
   return job.status === 'running' || job.status === 'stopping'
@@ -96,6 +108,24 @@ export function collectTreeJobs(
 }
 
 /**
+ * A job owner is clickable only when the owner session exists in the
+ * dashboard timeline. Filters may hide that row temporarily; locating the
+ * owner clears them. An unavailable timeline owner remains visibly unlinked.
+ */
+export function resolveJobOwner(
+  row: TreeJob,
+  displayRows: readonly JobOwnerDisplayRow[] | undefined,
+): JobOwnerResolution {
+  const displayRow = displayRows?.find(candidate => candidate.id === row.ownerSessionId)
+  return {
+    ownerSessionId: row.ownerSessionId,
+    ownerTitle: row.ownerTitle,
+    displayTitle: displayRow?.title,
+    linked: displayRow !== undefined,
+  }
+}
+
+/**
  * Live rows first in start order, then settled rows newest-first (mirror of
  * the official ui-jobs ordering); a tie falls back to start order so the
  * sort never depends on the host's map iteration.
@@ -140,22 +170,4 @@ export function jobStatusLabel(
     case 'killed': return t('jobStatusKilled')
     case 'failed': return t('jobStatusFailed')
   }
-}
-
-/**
- * Elapsed time in at most two adjacent units (mirror of the official
- * ui-jobs duration wording). A background job that outlives an hour is
- * already exceptional, so hours is the widest unit.
- */
-export function formatJobDuration(
-  elapsedMs: number,
-  t: (key: CopyKey, params?: Record<string, string | number>) => string,
-): string {
-  const total = Math.max(0, Math.floor(elapsedMs / 1_000))
-  const seconds = total % 60
-  const minutes = Math.floor(total / 60) % 60
-  const hours = Math.floor(total / 3_600)
-  if (hours > 0) return t('jobDurationHours', { hours, minutes })
-  if (minutes > 0) return t('jobDurationMinutes', { minutes, seconds })
-  return t('jobDurationSeconds', { seconds })
 }
