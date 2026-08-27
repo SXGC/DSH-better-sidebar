@@ -926,30 +926,30 @@ describe('Run Dashboard view', () => {
       },
     ]
     const list = makeList(baseSnapshot())
-    const interruptSubagent = vi.fn(async () => 'accepted' as const)
-    const closeSubagent = vi.fn(async () => 'closed' as const)
+    const interruptSubagent = vi.fn(async function (this: { bindingToken?: string }) {
+      expect(this.bindingToken).toBe('sessions-service')
+      return 'accepted' as const
+    })
+    const closeSubagent = vi.fn(async function (this: { bindingToken?: string }) {
+      expect(this.bindingToken).toBe('sessions-service')
+      return 'closed' as const
+    })
+    const controls = {
+      bindingToken: 'sessions-service',
+      interruptSubagent,
+      closeSubagent,
+    } as unknown as Partial<Context['sessions']>
     const store = createSidebarStore()
     store.setSession('root')
     const { container, unmount } = mount(
       createElement(SubagentView, {
         sessionId: 'root',
         active: true,
-        ctx: makeCtx(list, () => {}, { interruptSubagent, closeSubagent } as Partial<Context['sessions']>),
+        ctx: makeCtx(list, () => {}, controls),
         store,
       }),
     )
     await act(async () => {})
-
-    await act(async () => {
-      ;(container.querySelector('button[aria-label="中断 worker"]') as HTMLButtonElement).click()
-    })
-    await act(async () => {})
-    expect(interruptSubagent).toHaveBeenCalledWith({
-      parentSessionId: 'root',
-      childSessionId: 'child',
-      mode: 'continuable',
-    })
-    expect(container.textContent).toContain('已请求中断代理')
 
     await act(async () => {
       ;(container.querySelector('button[aria-label="关闭 worker"]') as HTMLButtonElement).click()
@@ -971,6 +971,17 @@ describe('Run Dashboard view', () => {
       mode: 'continuable',
     }, expect.any(String))
     expect(container.textContent).toContain('代理已关闭')
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="中断 worker"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+    expect(interruptSubagent).toHaveBeenCalledWith({
+      parentSessionId: 'root',
+      childSessionId: 'child',
+      mode: 'continuable',
+    })
+    expect(container.textContent).toContain('已请求中断代理')
     expect(container.textContent).not.toContain('restart')
     expect(container.textContent).not.toContain('重新运行')
     unmount()

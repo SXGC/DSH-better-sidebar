@@ -1500,19 +1500,17 @@ export function SubagentView(props: {
     try {
       let outcome: SidebarSubagentControlOutcome
       if (action === 'interrupt') {
-        const interrupt = ctx.sessions.interruptSubagent
-        if (interrupt === undefined) {
+        if (ctx.sessions.interruptSubagent === undefined) {
           setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'failed' })
           return
         }
-        outcome = await interrupt(address)
+        outcome = await ctx.sessions.interruptSubagent(address)
       } else {
-        const close = ctx.sessions.closeSubagent
-        if (close === undefined) {
+        if (ctx.sessions.closeSubagent === undefined) {
           setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'failed' })
           return
         }
-        outcome = await close(address, operationId())
+        outcome = await ctx.sessions.closeSubagent(address, operationId())
       }
       setControlState({
         kind: outcome === 'accepted' || outcome === 'closed' ? 'done' : 'error',
