@@ -110,7 +110,7 @@ describe('agent timeline client projection', () => {
     expect(row.wallDurationMs).toBe(11_000)
   })
 
-  it('leaves the last live or cold segment open and renders it against now', () => {
+  it('leaves an open cold tail undrawn: durations and the end stamp stop where the agent went cold', () => {
     const result = timeline([
       agent({
         sessionId: 'cold-worker',
@@ -130,7 +130,29 @@ describe('agent timeline client projection', () => {
 
     expect(row.segments.at(-1)).toEqual({ start: 5_000, state: { residency: 'cold', lastTurn: 'idle' } })
     expect(row.activeDurationMs).toBe(4_000)
+    expect(row.wallDurationMs).toBe(4_000)
+    expect(row.endedAt).toBe(5_000)
+  })
+
+  it('grows wall duration with the clock only while the tail is still live', () => {
+    const result = timeline([
+      agent({
+        sessionId: 'live-worker',
+        parentSessionId: 'root',
+        path: '/root/live-worker',
+        declaredAt: 1_000,
+        declarationSeq: 1,
+        state: state('running'),
+        statePoints: [
+          { seq: 2, time: 2_000, transition: 'turn-started', state: state('running') },
+        ],
+      }),
+    ])
+
+    const row = buildTimelineDisplay({ timeline: result, now: 11_000 }).rows.find(item => item.id === 'live-worker')!
+
     expect(row.wallDurationMs).toBe(10_000)
+    expect(row.endedAt).toBeUndefined()
   })
 
   it('reports the last drawn instant: open live tails run to now, open cold tails stop at their start', () => {

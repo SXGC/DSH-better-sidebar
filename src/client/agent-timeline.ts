@@ -211,7 +211,7 @@ export function timelineContentEnd(rows: readonly TimelineDisplayRow[], now: num
   let end: number | undefined
   for (const row of rows) {
     for (const segment of row.segments) {
-      const segmentEnd = segment.end ?? (segment.state.residency === 'cold' ? segment.start : now)
+      const segmentEnd = segmentEndAt(segment, now)
       end = end === undefined ? segmentEnd : Math.max(end, segmentEnd)
     }
   }
@@ -298,9 +298,13 @@ function rootDisplayRow(
 
 function agentDisplayRow(row: AgentTimelineRow, depth: number, now: number, longRunningMinutes: number): TimelineDisplayRow {
   const segments = buildSegments(row)
-  const endedAt = row.state.residency === 'closed'
-    ? segments.findLast(segment => segment.state.residency === 'closed')?.start
-    : undefined
+  // A row has ended once its last span is not live: `closed` for good, `cold`
+  // until someone resumes it. Either way the agent stopped working at that
+  // span's start, which is the instant the meta line spells as its end.
+  const lastSegment = segments.at(-1)
+  const endedAt = lastSegment === undefined || lastSegment.state.residency === 'live'
+    ? undefined
+    : lastSegment.start
   return {
     id: row.sessionId,
     kind: 'agent',
@@ -447,11 +451,23 @@ function diagnosticDisplayRow(entry: SidebarSubagentCatalog['entries'][number], 
   }
 }
 
+/**
+ * The instant a segment stops covering time: its recorded end, else `now`
+ * while a live span is still running, else its own start. An open `cold` or
+ * `closed` tail is the agent sitting stopped — unloaded, maybe resumable —
+ * so it must not keep growing with the clock; the gantt already draws such a
+ * tail as a stub, and {@link timelineContentEnd} draws the same line.
+ */
+function segmentEndAt(segment: TimelineSegment, now: number): number {
+  if (segment.end !== undefined) return segment.end
+  return segment.state.residency === 'live' ? now : segment.start
+}
+
 function durationOf(segments: readonly TimelineSegment[], now: number, mode: 'active' | 'wall'): number {
   let total = 0
   for (const segment of segments) {
     if (mode === 'active' && segment.state.residency !== 'live') continue
-    total += Math.max(0, (segment.end ?? now) - segment.start)
+    total += Math.max(0, segmentEndAt(segment, now) - segment.start)
   }
   return total
 }
