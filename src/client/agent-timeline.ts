@@ -272,13 +272,15 @@ function rootDisplayRow(
   running: boolean,
   now: number,
 ): TimelineDisplayRow {
-  const start = timeline.root.startedAt ?? timeline.root.lastEventAt ?? now
+  const start = timeline.root.startedAt
   const state: AgentState = running
     ? { residency: 'live', turn: { kind: 'running' } }
     : { residency: 'live', turn: { kind: 'completed', stopReason: 'completed' } }
-  const segment: TimelineSegment = running
-    ? { start, state }
-    : { start, end: timeline.root.lastEventAt ?? start, state }
+  const segments: TimelineSegment[] = start === null
+    ? []
+    : [running
+        ? { start, state }
+        : { start, end: timeline.root.lastEventAt ?? start, state }]
   return {
     id: timeline.root.sessionId,
     kind: 'root',
@@ -286,11 +288,11 @@ function rootDisplayRow(
     depth: 0,
     path: timeline.root.path,
     state,
-    startedAt: timeline.root.startedAt ?? undefined,
-    endedAt: running ? undefined : timeline.root.lastEventAt ?? undefined,
-    segments: timeline.root.startedAt === null && timeline.root.lastEventAt === null ? [] : [segment],
-    activeDurationMs: durationOf([segment], now, 'active'),
-    wallDurationMs: durationOf([segment], now, 'wall'),
+    startedAt: start ?? undefined,
+    endedAt: running || start === null ? undefined : timeline.root.lastEventAt ?? undefined,
+    segments,
+    activeDurationMs: durationOf(segments, now, 'active'),
+    wallDurationMs: durationOf(segments, now, 'wall'),
     contextOnly: false,
     longRunning: false,
   }

@@ -257,7 +257,7 @@ function timelineResult(
     root: {
       sessionId: rootSessionId,
       path: '/root',
-      startedAt: firstEventAt(snapshot.events),
+      startedAt: firstTurnAt(snapshot.events),
       lastEventAt: lastEventAt(snapshot.events),
     },
     asOfSeq: projection.asOfSeq,
@@ -265,8 +265,11 @@ function timelineResult(
   }
 }
 
-function firstEventAt(events: readonly SidebarSessionEvent[]): number | null {
-  return events[0]?.time ?? null
+function firstTurnAt(events: readonly SidebarSessionEvent[]): number | null {
+  for (const event of events) {
+    if (event.type === 'turn/start') return event.time
+  }
+  return null
 }
 
 function lastEventAt(events: readonly SidebarSessionEvent[]): number | null {

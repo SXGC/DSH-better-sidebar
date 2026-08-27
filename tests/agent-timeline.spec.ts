@@ -42,6 +42,20 @@ function ids(rows: TimelineDisplayRow[]): string[] {
 }
 
 describe('agent timeline client projection', () => {
+  it('does not invent a running root segment before the first turn starts', () => {
+    const result: AgentTimelineResult = {
+      root: { sessionId: 'root', path: '/root', startedAt: null, lastEventAt: 5_000 },
+      asOfSeq: 3,
+      agents: [],
+    }
+
+    const root = buildTimelineDisplay({ timeline: result, rootRunning: true, now: 20_000 }).rows[0]!
+
+    expect(root.segments).toEqual([])
+    expect(root.activeDurationMs).toBe(0)
+    expect(root.wallDurationMs).toBe(0)
+  })
+
   it('keeps root first, orders native descendants as a stable tree, and appends catalog-only descendants as diagnostics', () => {
     const result = timeline([
       agent({ sessionId: 'b', parentSessionId: 'root', path: '/root/b', declaredAt: 2_000, declarationSeq: 2 }),

@@ -136,8 +136,25 @@ function ctxWith(options: {
 }
 
 describe('agents.timeline route', () => {
+  it('starts the root timeline at the first turn instead of earlier session setup events', async () => {
+    const rootEvents = [
+      event('permission/preset', 0, {}, 100),
+      event('turn/start', 1, {}, 200),
+      event('turn/end', 2, {}, 300),
+      event('turn/start', 3, {}, 400),
+    ]
+    const api = buildAgentTimelineApi(ctxWith({
+      persisted: { root: { meta: { id: 'root', createdAt: 50 }, events: rootEvents } },
+    }))
+
+    const value = await api.timeline({ sessionId: 'root' })
+
+    expect(value.root).toEqual({ sessionId: 'root', path: '/root', startedAt: 200, lastEventAt: 400 })
+  })
+
   it('projects restored native descendants with spawn order, all state points, cold/completed states, and no sensitive fields', async () => {
     const rootEvents = [
+      event('turn/start', 0, {}, 1_000),
       declared(1, 'b', 'root', '/root/b'),
       declared(2, 'a', 'root', '/root/a'),
       declared(3, 'a1', 'a', '/root/a/a1'),
@@ -157,7 +174,7 @@ describe('agents.timeline route', () => {
 
     const value = await api.timeline({ sessionId: 'root' })
 
-    expect(value.root).toEqual({ sessionId: 'root', path: '/root', startedAt: 1001, lastEventAt: 1012 })
+    expect(value.root).toEqual({ sessionId: 'root', path: '/root', startedAt: 1_000, lastEventAt: 1012 })
     expect(value.asOfSeq).toBe(12)
     expect(value.agents.map(row => row.sessionId)).toEqual(['b', 'a', 'a1'])
     const b = value.agents[0]!
