@@ -1676,12 +1676,6 @@ export function SubagentView(props: {
             </button>
           </div>
         )}
-        {filteredDisplay !== undefined && filteredDisplay.rows.length === 1 && (
-          <div className={css.subagentEmpty}>
-            <div>{t('subagentEmpty')}</div>
-            <div className={css.subagentEmptyHint}>{t('subagentEmptyDesc')}</div>
-          </div>
-        )}
         {filteredDisplay !== undefined && (layout === 'list'
           ? (
             <RunDashboardList
@@ -1720,6 +1714,12 @@ export function SubagentView(props: {
               onCloseAgent={closeAgent}
             />
           ))}
+        {filteredDisplay !== undefined && filteredDisplay.rows.length === 1 && (
+          <div className={css.subagentEmpty}>
+            <div>{t('subagentEmpty')}</div>
+            <div className={css.subagentEmptyHint}>{t('subagentEmptyDesc')}</div>
+          </div>
+        )}
         <JobsSection
           byId={byId}
           jobsBySession={list.jobsBySession}

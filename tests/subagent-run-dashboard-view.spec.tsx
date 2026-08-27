@@ -221,6 +221,40 @@ describe('Run Dashboard view', () => {
     unmount()
   })
 
+  it('places the no-subagents message below the root session row', async () => {
+    fetchQueue = [{ ...baseTimeline, agents: [] }]
+    const snapshot = baseSnapshot()
+    const list = makeList({
+      ...snapshot,
+      byId: { root: snapshot.byId.root! },
+      subagentsByParent: {
+        root: {
+          state: 'ready',
+          parentAvailable: true,
+          error: null,
+          entries: [],
+        },
+      },
+    })
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+
+    await act(async () => {})
+
+    const rootRow = container.querySelector('[data-run-dashboard-row-id="root"]')
+    const emptyState = [...container.querySelectorAll('div')].find(element =>
+      element.firstElementChild?.textContent === '暂无子代理'
+      && element.lastElementChild?.textContent === '当前主代理派生的子代理将显示在这里',
+    )
+    expect(rootRow).not.toBeNull()
+    expect(emptyState).toBeDefined()
+    expect(rootRow!.compareDocumentPosition(emptyState!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    unmount()
+  })
+
   it('shows the effective model name and reasoning effort on agent cards by default', async () => {
     fetchQueue = [{
       ...baseTimeline,
