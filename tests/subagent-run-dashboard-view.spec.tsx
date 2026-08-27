@@ -221,6 +221,29 @@ describe('Run Dashboard view', () => {
     unmount()
   })
 
+  it('shows the effective model name and reasoning effort on agent cards by default', async () => {
+    fetchQueue = [{
+      ...baseTimeline,
+      agents: [{
+        ...baseTimeline.agents[0]!,
+        modelSelection: { provider: 'deepseek', model: 'gpt-5.5', reasoningEffort: 'high' },
+      }],
+    }]
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+
+    await act(async () => {})
+
+    const card = container.querySelector('[data-run-dashboard-row-id="child"]')
+    expect(card?.textContent).toContain('gpt-5.5')
+    expect(card?.textContent).toContain('high')
+    unmount()
+  })
+
   it('does not request a new timeline while the page is hidden', async () => {
     const list = makeList(baseSnapshot())
     const store = createSidebarStore()

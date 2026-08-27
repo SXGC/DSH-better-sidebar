@@ -547,29 +547,6 @@ function forkTurnsLabel(value: AgentDetailResult['forkTurns']): string {
   return typeof value === 'number' ? String(value) : value
 }
 
-/**
- * The tree's dominant model label. Rows on the dominant model keep their
- * meta line empty (the detail panel still spells it); only a deviating
- * model earns a line of row space.
- */
-function dominantModelLabel(rows: readonly TimelineDisplayRow[]): string | undefined {
-  const counts = new Map<string, number>()
-  for (const row of rows) {
-    if (row.model === undefined) continue
-    const label = modelLabel(row.model)
-    counts.set(label, (counts.get(label) ?? 0) + 1)
-  }
-  let best: string | undefined
-  let bestCount = 0
-  for (const [label, count] of counts) {
-    if (count > bestCount) {
-      best = label
-      bestCount = count
-    }
-  }
-  return best
-}
-
 function operationId(): string {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -805,8 +782,6 @@ function RunDashboardTreeRow(props: {
   /** Draw the per-row spark strip (the list layout has no shared canvas). */
   range: TimelineDisplay['range'] | undefined
   now: number
-  /** The tree's dominant model label: an identical model stays off the row. */
-  baselineModel: string | undefined
   /** Whether this row's action buttons are revealed (click-toggled). */
   actionsOpen: boolean
   onToggleActions: (row: TimelineDisplayRow) => void
@@ -823,7 +798,6 @@ function RunDashboardTreeRow(props: {
     row,
     range,
     now,
-    baselineModel,
     actionsOpen,
     onToggleActions,
     selectedAgentId,
@@ -850,9 +824,8 @@ function RunDashboardTreeRow(props: {
   const word = agentRowState(row)
   const silent = statusWordSilent(kind)
   // The path lives in the title tooltip (the title IS the leaf); the meta
-  // line only spells a model that deviates from the tree's dominant one.
-  const model = row.model === undefined ? undefined : modelLabel(row.model)
-  const meta = model !== undefined && model !== baselineModel ? model : ''
+  // line always spells the effective model selection for an agent card.
+  const meta = row.model === undefined ? '' : modelLabel(row.model)
   const span = row.kind === 'diagnostic'
     ? t('runDashboardTimeUnavailable')
     : `${formatTime(row.startedAt)} → ${row.endedAt === undefined ? t('runDashboardRunning') : formatTime(row.endedAt)}`
@@ -1057,7 +1030,6 @@ function RunDashboardRows(props: {
   const dragStartRef = useRef<{ x: number; width: number } | null>(null)
   const treeRef = useRef<HTMLDivElement>(null)
   const laneHeights = useLaneHeights(treeRef, display.rows.map(row => row.id).join('\u0000'))
-  const baselineModel = useMemo(() => dominantModelLabel(display.rows), [display.rows])
   const ticks = useMemo(() => timelineTicks(range, width), [range, width])
   const tickStep = ticks.length > 1 ? ticks[1]!.time - ticks[0]!.time : 60_000
 
@@ -1092,7 +1064,6 @@ function RunDashboardRows(props: {
             row={row}
             range={undefined}
             now={now}
-            baselineModel={baselineModel}
             actionsOpen={openActionsId === row.id}
             onToggleActions={onToggleActions}
             selectedAgentId={selectedAgentId}
@@ -1202,7 +1173,6 @@ function RunDashboardList(props: {
   onInterruptAgent: (row: TimelineDisplayRow) => void
   onCloseAgent: (row: TimelineDisplayRow) => void
 }) {
-  const baselineModel = useMemo(() => dominantModelLabel(props.display.rows), [props.display.rows])
   return (
     <div data-run-dashboard-list className={css.runDashboardList} role="treegrid" aria-label={t('subagent')}>
       {props.display.rows.map(row => (
@@ -1211,7 +1181,6 @@ function RunDashboardList(props: {
           row={row}
           range={props.display.range}
           now={props.now}
-          baselineModel={baselineModel}
           actionsOpen={props.openActionsId === row.id}
           onToggleActions={props.onToggleActions}
           selectedAgentId={props.selectedAgentId}
