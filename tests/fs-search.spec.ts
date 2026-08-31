@@ -1,7 +1,8 @@
 /**
  * fs-search: the host's recursive file-name search behind the editor side
- * panel's search box. Matches are case-insensitive name substrings, reported
- * RELATIVE to the root ('/'-separated); noise directories (`.git`,
+ * panel's search box. Matches are case-insensitive name substrings or
+ * relative-path suffixes, reported RELATIVE to the root ('/'-separated);
+ * noise directories (`.git`,
  * `node_modules`, build caches) are skipped, symlinked directories are
  * never descended (cycle safety), and the maxMatches/maxVisited budgets
  * stop a runaway walk with `truncated: true`.
@@ -51,6 +52,8 @@ function makeFixture(): string {
   writeFileSync(join(dir, 'src', 'Index.TS'), 'code')
   writeFileSync(join(dir, 'src', 'util.ts'), 'code')
   writeFileSync(join(dir, 'docs', 'guide.md'), 'doc')
+  mkdirSync(join(dir, 'artifacts'))
+  writeFileSync(join(dir, 'artifacts', 'baidu-homepage.png'), 'image')
   writeFileSync(join(dir, '.git', 'config'), 'git-internal')
   writeFileSync(join(dir, '.git', 'objects', 'readme-pack'), 'git-internal')
   return dir
@@ -528,6 +531,26 @@ describe('fs-search', () => {
       expect((await searchWithJs(dir, 'INDEX.TS')).matches).toEqual(['src/Index.TS'])
       // Directory names match too (the client can hint where matches live).
       expect((await searchWithJs(dir, 'SRC')).matches).toEqual(['src'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['js', 'fd', 'rg'] as const)('matches a cwd-relative path suffix through the %s engine', async (engine) => {
+    const dir = makeFixture()
+    const runCommand = vi.fn<RunCommand>(async (_command, args) => args[0] === '--version'
+      ? { code: 0, stdout: 'available', stderr: '' }
+      : { code: 0, stdout: 'artifacts/baidu-homepage.png\0', stderr: '' })
+    try {
+      await expect(searchFiles(dir, 'ARTIFACTS\\baidu-homepage.png', {
+        engine,
+        resolvePackagedRg: async () => '/fake/rg',
+        runCommand,
+      })).resolves.toEqual({ matches: ['artifacts/baidu-homepage.png'], truncated: false })
+      if (engine === 'fd') {
+        expect(runCommand.mock.calls[0]![1]).toContain('--full-path')
+        expect(runCommand.mock.calls[0]![1].slice(-3)).toEqual(['--', 'ARTIFACTS/baidu-homepage\\.png$', '.'])
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

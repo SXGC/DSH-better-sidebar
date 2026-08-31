@@ -195,7 +195,7 @@ describe('EditorHost (files window)', () => {
       expect(container.querySelector('[role="separator"]')).toBeNull()
       // The tree panel fills the whole window — its search box is the only
       // input, and (no cwd) the tree shows its no-session placeholder.
-      expect(container.querySelector('input[placeholder^="Search files"]')).not.toBeNull()
+      expect(container.querySelector('input[placeholder^="Search by file name"]')).not.toBeNull()
       expect(container.innerHTML).toContain('Select a conversation')
     } finally {
       unmount()
@@ -315,7 +315,7 @@ describe('EditorHost (files window)', () => {
       // the tree root row and the search box is present; the editor empty
       // hint and the file path input are NOT.
       expect(html).toContain('src')
-      expect(html).toContain('Search files by name…')
+      expect(html).toContain('Search by file name or path suffix…')
       expect(html).not.toContain('Pick a file from the tree panel')
       expect(html).not.toContain('File path (relative')
     } finally {

@@ -29,7 +29,7 @@ export const ja: Record<string, string> = {
   editorExplorerSplitDesc: 'パスなしウィンドウはエクスプローラー単体（ツリーのみ）。各ファイルは別ウィンドウで開く（ツリーは格納済み、デフォルトで折りたたみ）',
   editorTreeToggle: 'ファイルツリーパネル',
   editorPathPlaceholder: 'ファイルパス（セッションディレクトリからの相対 or 絶対）、Enter で開く',
-  editorSearchPlaceholder: 'ファイル名で検索…',
+  editorSearchPlaceholder: 'ファイル名またはパス末尾で検索…',
   editorSearchNoResults: '一致するファイルはありません',
   editorSearchTruncated: '結果が多すぎます — 一部のみ表示',
   editorEmptyHint: '右のファイルツリーまたは上のパス入力欄からファイルを選んでプレビュー',
