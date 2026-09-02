@@ -108,10 +108,13 @@ export function agentStateKind(state: AgentState): string {
 /**
  * Display-level pass over a row's raw segments: merge adjacent same-kind
  * segments, absorb slivers shorter than `minFraction` of the range into their
- * left neighbour, and cap a trailing open `cold` span to a short stub so an
- * unloaded agent reads as "ended here", not as a texture running to the right
- * edge. Errored slivers are never absorbed — a brief failure is still signal.
- * The raw segments stay untouched: durations and tooltips keep exact values.
+ * left neighbour, and cap a trailing `cold` span to a short stub so an
+ * unloaded agent reads as "ended here", not as a block running to its later
+ * close. Trailing means no live segment follows: an open cold tail AND a
+ * cold span closed afterwards both stub, and the close tick right after a
+ * stub adds no pixel, so it is dropped. Errored slivers are never absorbed —
+ * a brief failure is still signal. The raw segments stay untouched:
+ * durations and tooltips keep exact values.
  */
 export function displaySegments(
   segments: readonly TimelineSegment[],
@@ -121,23 +124,34 @@ export function displaySegments(
 ): TimelineSegment[] {
   if (range === null || segments.length === 0) return [...segments]
   const minMs = Math.max(1, (range.end - range.start) * minFraction)
-  type Working = TimelineSegment & { kind: string }
+  const lastLive = segments.reduce(
+    (acc, segment, index) => (segment.state.residency === 'live' ? index : acc),
+    -1,
+  )
+  type Working = TimelineSegment & { kind: string; stub?: boolean }
   const merged: Working[] = []
-  for (const segment of segments) {
+  for (const [index, segment] of segments.entries()) {
     const kind = agentStateKind(segment.state)
-    const end = segment.end === undefined && segment.state.residency === 'cold'
-      ? Math.min(now, segment.start + minMs)
-      : segment.end
+    const stub = segment.state.residency === 'cold' && index > lastLive
+    const end = stub ? Math.min(segment.end ?? now, segment.start + minMs) : segment.end
     const prev = merged[merged.length - 1]
-    const sliver = (end ?? now) - segment.start < minMs && kind !== 'errored'
+    if (kind === 'closed' && prev?.stub === true) continue
+    if (stub && segment.state.residency === 'cold' && segment.state.lastTurn === 'errored' && prev?.kind === 'errored') continue
+    const sliver = !stub && (end ?? now) - segment.start < minMs && kind !== 'errored'
     if (prev !== undefined && (prev.kind === kind || sliver)) {
       if (end === undefined) delete prev.end
       else if (prev.end !== undefined) prev.end = Math.max(prev.end, end)
       continue
     }
-    merged.push({ start: segment.start, ...(end === undefined ? {} : { end }), state: segment.state, kind })
+    merged.push({
+      start: segment.start,
+      ...(end === undefined ? {} : { end }),
+      state: segment.state,
+      kind,
+      ...(stub ? { stub } : {}),
+    })
   }
-  return merged.map(({ kind: _kind, ...segment }) => segment)
+  return merged.map(({ kind: _kind, stub: _stub, ...segment }) => segment)
 }
 
 /** The state-dot semantics of an agent state, mirroring the job dot colors. */

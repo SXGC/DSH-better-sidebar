@@ -520,10 +520,12 @@ function segmentGeometry(
   now: number,
 ): { left: number; width: number } {
   const span = Math.max(1, range.end - range.start)
+  const duration = (segment.end ?? now) - segment.start
   return {
     left: ((segment.start - range.start) / span) * 100,
-    // A hairline minimum keeps instant transitions (a `closed` point) visible.
-    width: Math.max(0.5, (((segment.end ?? now) - segment.start) / span) * 100),
+    // Only a genuinely instant transition needs a hairline. Giving every
+    // short span the same minimum makes it extend over its next state.
+    width: duration === 0 ? 0.5 : Math.max(0, (duration / span) * 100),
   }
 }
 

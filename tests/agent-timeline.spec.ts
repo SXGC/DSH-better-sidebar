@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  agentStateKind,
   buildTimelineDisplay,
   countActiveFilters,
+  displaySegments,
   filterTimelineDisplay,
   formatAgentState,
   normalizeLongRunningMinutes,
@@ -146,6 +148,74 @@ describe('agent timeline client projection', () => {
     expect(row.activeDurationMs).toBe(4_000)
     expect(row.wallDurationMs).toBe(4_000)
     expect(row.endedAt).toBe(5_000)
+  })
+
+  it('caps a trailing cold span to the same stub when a close follows it', () => {
+    const shown = displaySegments(
+      [
+        { start: 2_000, end: 5_000, state: state('running') },
+        { start: 5_000, end: 10_000, state: { residency: 'cold', lastTurn: 'idle' } },
+        { start: 10_000, end: 10_000, state: { residency: 'closed' } },
+      ],
+      { start: 0, end: 20_000 },
+      20_000,
+      0.01,
+    )
+
+    expect(shown).toEqual([
+      { start: 2_000, end: 5_000, state: state('running') },
+      { start: 5_000, end: 5_200, state: { residency: 'cold', lastTurn: 'idle' } },
+    ])
+  })
+
+  it('keeps a trailing cold stub stable across large-timestamp clock ticks', () => {
+    const start = 1_756_123_469_134
+    const segments = [
+      { start: start - 3_000, end: start, state: state('running') },
+      { start, state: { residency: 'cold', lastTurn: 'idle' } },
+    ] as const
+    const rangeStart = 1_756_119_844_444
+    const fraction = 3 / 938
+
+    const before = displaySegments(segments, { start: rangeStart, end: 1_756_123_476_789 }, 1_756_123_476_789, fraction)
+    const after = displaySegments(segments, { start: rangeStart, end: 1_756_123_477_789 }, 1_756_123_477_789, fraction)
+
+    expect(before.map(segment => agentStateKind(segment.state))).toEqual(['running', 'cold'])
+    expect(after.map(segment => agentStateKind(segment.state))).toEqual(['running', 'cold'])
+  })
+
+  it('does not stack a trailing cold stub over an error end marker at the same instant', () => {
+    const shown = displaySegments(
+      [
+        { start: 1_000, end: 2_000, state: state('provisioning') },
+        { start: 2_000, end: 2_000, state: state('errored') },
+        { start: 2_000, state: { residency: 'cold', lastTurn: 'errored' } },
+      ],
+      { start: 0, end: 10_000 },
+      10_000,
+      0.01,
+    )
+
+    expect(shown.map(segment => agentStateKind(segment.state))).toEqual(['provisioning', 'errored'])
+  })
+
+  it('keeps a cold gap at full width when the agent resumed afterwards', () => {
+    const shown = displaySegments(
+      [
+        { start: 2_000, end: 5_000, state: state('running') },
+        { start: 5_000, end: 8_000, state: { residency: 'cold', lastTurn: 'idle' } },
+        { start: 8_000, end: 12_000, state: state('running') },
+      ],
+      { start: 0, end: 20_000 },
+      20_000,
+      0.01,
+    )
+
+    expect(shown).toEqual([
+      { start: 2_000, end: 5_000, state: state('running') },
+      { start: 5_000, end: 8_000, state: { residency: 'cold', lastTurn: 'idle' } },
+      { start: 8_000, end: 12_000, state: state('running') },
+    ])
   })
 
   it('grows wall duration with the clock only while the tail is still live', () => {

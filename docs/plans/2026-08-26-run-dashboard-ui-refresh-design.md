@@ -33,7 +33,7 @@
 | 静默 | 已关闭 | 斜杠圆圈 | 不显示(终态);关闭瞬间在 spark 上是深灰刻线 |
 | 静默(修饰) | 仅上下文 | 整行降透明度 | 不可操作,仅历史参照 |
 
-Spark 纹理沿用现实现的编码:运行=实绿、创建=绿斜纹、等待=琥珀斜纹、中断=琥珀竖纹、出错=红交叉纹、结束态=灰;进行中分段右端渐隐。
+Spark 纹理沿用现实现的编码:运行=实绿、创建=绿斜纹、等待=琥珀斜纹、中断=琥珀竖纹、出错=红交叉纹、结束态=实心深灰刻线(不再用 1px 竖纹,短桩在 1Hz now-tick 下会闪);进行中分段右端渐隐。
 
 用户确认的完整渲染稿(12 个状态逐行):
 
@@ -47,7 +47,7 @@ Spark 纹理沿用现实现的编码:运行=实绿、创建=绿斜纹、等待=�
 
 ## 实施记录(同日,本分支)
 
-- `agent-timeline.ts`:新增 `displaySegments()` 显示层合并 pass —— 相邻同类合并、小于量程阈值的碎片并入左邻(errored 碎片永不吸收)、trailing open cold 段截为短桩;原始 segments 不动,时长/tooltip 用精确值。阈值:spark 1%、canvas 3px/画布宽(放大即恢复细节)。
+- `agent-timeline.ts`:新增 `displaySegments()` 显示层合并 pass —— 相邻同类合并、小于量程阈值的碎片并入左邻(errored 与 trailing cold 短桩永不吸收)、后面不再有 live 段的 cold 尾统一截为短桩;错误刻线后不再叠加 cold 短桩。原始 segments 不动,时长/tooltip 用精确值。阈值:spark 1%、canvas 3px/画布宽(放大即恢复细节)。
 - `SubagentView.tsx`:`AgentStateBadge` → `AgentStateMark`(每状态独立形状)+ `statusTier`/`statusWordSilent` 分层词;行结构改 B 骨架;行点击切换按钮展开(`openActionsId`,单行互斥,按钮容器阻止冒泡);`baselineModel`(主流模型)去重;不可用的「中断/关闭」不渲染;job 选中态提升 + 详情 dock 移至最后;详情 header 带代理名。
 - `SubagentView.module.css`:标记/状态文本/底带/卡片缩进/连接肘/spark 底边/点击展开按钮(`data-actions-open` + focus-within;max-width+max-height 双收起,避免 0 宽 wrap 竖排撑高行)/sticky 详情 dock。
 - **顺手修复宿主 bug**:`.runDashboardLane` 改 flex 布局 —— 原 `laneBars` 的 `margin: 12px` 从 lane 顶部外边距塌陷逃逸,宽布局甘特每行累积 +12px 漂移(9 行漂移整整一行),Playwright 实测 drift 全 0。

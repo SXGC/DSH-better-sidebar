@@ -445,6 +445,39 @@ describe('Run Dashboard view', () => {
     }
   })
 
+  it('does not widen a short non-instant segment past its real end', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(20_000)
+    try {
+      fetchQueue = [{
+        root: { sessionId: 'root', path: '/root', startedAt: 1_000, lastEventAt: 20_000 },
+        asOfSeq: 4,
+        agents: [{
+          ...baseTimeline.agents[0]!,
+          declaredAt: 1_000,
+          statePoints: [
+            { seq: 2, time: 1_050, transition: 'ready', state: { residency: 'live', turn: { kind: 'running' } } },
+            { seq: 3, time: 3_000, transition: 'became-cold', state: { residency: 'cold', lastTurn: 'idle' } },
+          ],
+        }],
+      }]
+      const list = makeList(baseSnapshot())
+      const store = createSidebarStore()
+      store.setSession('root')
+      const { container, unmount } = mount(
+        createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+      )
+      await act(async () => {})
+
+      const segment = container.querySelector<HTMLElement>(
+        '[data-run-dashboard-row-id="child"] [data-segment-state="provisioning"]',
+      )
+      expect(Number.parseFloat(segment?.style.width ?? '')).toBeCloseTo(0.263158, 6)
+      unmount()
+    } finally {
+      now.mockRestore()
+    }
+  })
+
   it('renders the mobile fallback list with the same row actions but without the shared gantt area', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true })
     fetchQueue = [{

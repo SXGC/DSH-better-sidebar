@@ -660,10 +660,8 @@
   top: 0;
   bottom: 0;
   display: block;
-  min-width: 2px;
   overflow: hidden;
   box-sizing: border-box;
-  padding: 0 5px;
   box-shadow: inset -1px 0 0 var(--dsw-alias-bg-base);
   background-color: var(--dsw-alias-interactive-bg-active);
   color: var(--dsw-alias-label-primary);
@@ -728,14 +726,13 @@
   background-color: color-mix(in srgb, var(--dsw-alias-label-secondary) 16%, transparent);
 }
 
+/* End ticks are a solid dark mark, never a 1px stripe weave: a 3px stub
+   with 1px-on/4px-off stripes only ever shows one line, and that line
+   vanishes on the 1Hz now-tick as the shared range grows. */
 .runDashboardSegment[data-segment-state="cold"],
 .runDashboardSegment[data-segment-state="closed"] {
-  background-color: color-mix(in srgb, var(--dsw-alias-label-tertiary) 8%, transparent);
-  background-image: repeating-linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--dsw-alias-label-tertiary) 34%, transparent) 0 1px,
-    transparent 1px 5px
-  );
+  background-color: color-mix(in srgb, var(--dsw-alias-label-tertiary) 48%, transparent);
+  box-shadow: none;
   color: var(--dsw-alias-label-secondary);
 }
 
