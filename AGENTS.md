@@ -9,7 +9,7 @@ better-sidebar 从 v0.4.0 起暴露 `ctx.betterSidebar` 服务（Cordis context 
 ## 0. 仓库硬约束（所有本仓库插件必须遵守）
 
 - **禁止修改 DeepSeek Harness (DSH) 源码**：对官方源码 checkout（`~/.dsh/source/current`）零写入——不得改 harness 包、不得把 harness 改动提交到它的分支。
-- **代码改动必须走 PR**：功能 / 修复 / 测试等非文档改动一律在分支上开发（`feat/*` / `fix/*`），用 `gh pr create` 发起 PR，review 合并后才进 main；**仅纯文档类改动**（README / AGENTS.md / docs/ 等）允许直接推送到 main。
+- **交付路径与正式版本门禁**：功能 / 修复 / 测试等代码改动推荐使用分支与 PR；经仓库维护者明确确认时，允许把已验证的修复直接交付到 main。**仅纯文档类改动**（README / AGENTS.md / docs/ 等）允许直接推送到 main。无论交付路径如何，正式版本的挂载验证必须使用包含基线 `5cf09d3a0a` 的正式 DSH CLI；本仓库不通过插件源码修改 DSH，也不把 harness 改动提交到官方仓库。
 - **挂载只走 `cordis.patch.yml` + profile 机制**（`~/.dsh/profiles/<profile>/`），插件永远作为独立包被 profile 引用，不反向侵入 DSH。
 - **DSH 市场受管安装兼容约束**：发布清单的 `dependencies` / `peerDependencies` / `optionalDependencies` 三字段**一律不得出现 `cordis`**（市场预览按名硬拒，optional 无效），且 `scripts` 不得含 `preinstall` / `install` / `postinstall` / `prepare`。回归由 `tests/market-manifest.spec.ts` 守护——违反即市场目录拿不到 `repository_backlink` 验证目标。
 - 需要 harness 没有的能力时，用 DSH **现成的只读/公开 API** 或插件自有路由实现（参考 §7 的 `jobs.output` 事件回放：读会话事件日志而非动注册表）；如果确实做不到，先向用户说明取舍，而不是直接改 DSH。
