@@ -71,6 +71,14 @@ function mount(node: ReactNode): { container: HTMLDivElement; render: (next: Rea
   }
 }
 
+function visibleStatusText(row: Element | null): string {
+  const status = row?.querySelector('[data-status-tier]')
+  if (status === null || status === undefined) return ''
+  const visible = status.cloneNode(true) as HTMLElement
+  for (const hidden of visible.querySelectorAll('[class*="runDashboardSrOnly"]')) hidden.remove()
+  return visible.textContent?.trim() ?? ''
+}
+
 const baseTimeline: AgentTimelineResult = {
   root: { sessionId: 'root', path: '/root', startedAt: 1_000, lastEventAt: 10_000 },
   asOfSeq: 10,
@@ -103,6 +111,7 @@ function baseSnapshot(): SidebarSessionList {
     },
     subagentsByParent: {
       root: {
+        asOfSeq: 10,
         state: 'ready',
         parentAvailable: true,
         error: null,
@@ -218,6 +227,196 @@ describe('Run Dashboard view', () => {
     expect(container.textContent).toContain('活跃时长')
     expect(container.textContent).toContain('墙钟')
     expect(container.querySelectorAll('[data-segment-state="cold"]')).toHaveLength(1)
+    unmount()
+  })
+
+  it('shows the current state word on settled and inactive agent rows', async () => {
+    const states: Array<{
+      state: AgentTimelineResult['agents'][number]['state']
+      transition: AgentTimelineResult['agents'][number]['statePoints'][number]['transition']
+      label: string
+    }> = [
+      { state: { residency: 'live', turn: { kind: 'idle' } }, transition: 'ready', label: '空闲' },
+      { state: { residency: 'live', turn: { kind: 'completed' } }, transition: 'turn-settled', label: '已完成' },
+      { state: { residency: 'cold', lastTurn: 'errored' }, transition: 'became-cold', label: '已卸载 · 上次已出错' },
+      { state: { residency: 'closed' }, transition: 'closed', label: '已关闭' },
+    ]
+    fetchQueue = states.map(({ state, transition }, index) => ({
+      ...baseTimeline,
+      asOfSeq: 11 + index,
+      agents: [{
+        ...baseTimeline.agents[0]!,
+        state,
+        statePoints: [{ seq: 3, time: 3_000, transition, state }],
+      }],
+    }))
+    const snapshot = baseSnapshot()
+    const list = makeList(snapshot)
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+
+    await act(async () => {})
+    expect(visibleStatusText(container.querySelector('[data-run-dashboard-row-id="child"]'))).toContain('空闲')
+
+    for (let index = 1; index < states.length; index += 1) {
+      const current = list.getSnapshot()
+      list.set({
+        ...current,
+        subagentsByParent: {
+          ...current.subagentsByParent,
+          root: { ...current.subagentsByParent!.root!, asOfSeq: 10 + index },
+        },
+      })
+      await act(async () => {})
+      expect(visibleStatusText(container.querySelector('[data-run-dashboard-row-id="child"]')))
+        .toContain(states[index]!.label)
+    }
+
+    unmount()
+  })
+
+  it('shows only an errored cold result as a separate error hint', async () => {
+    fetchQueue = [
+      {
+        ...baseTimeline,
+        asOfSeq: 11,
+        agents: [{
+          ...baseTimeline.agents[0]!,
+          state: { residency: 'cold', lastTurn: 'completed' },
+          statePoints: [{
+            seq: 3,
+            time: 3_000,
+            transition: 'became-cold',
+            state: { residency: 'cold', lastTurn: 'completed' },
+          }],
+        }],
+      },
+      {
+        ...baseTimeline,
+        asOfSeq: 12,
+        agents: [{
+          ...baseTimeline.agents[0]!,
+          state: { residency: 'cold', lastTurn: 'errored' },
+          statePoints: [{
+            seq: 3,
+            time: 3_000,
+            transition: 'became-cold',
+            state: { residency: 'cold', lastTurn: 'errored' },
+          }],
+        }],
+      },
+    ]
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+    await act(async () => {})
+
+    const child = () => container.querySelector('[data-run-dashboard-row-id="child"]')
+    expect(visibleStatusText(child())).toContain('已卸载')
+    expect(visibleStatusText(child())).not.toContain('上次已完成')
+    expect(child()?.querySelector('[data-cold-error]')).toBeNull()
+
+    const current = list.getSnapshot()
+    list.set({
+      ...current,
+      subagentsByParent: {
+        ...current.subagentsByParent,
+        root: { ...current.subagentsByParent!.root!, asOfSeq: 11 },
+      },
+    })
+    await act(async () => {})
+
+    const hint = child()?.querySelector('[data-cold-error]') as HTMLElement
+    expect(hint.textContent).toBe('上次已出错')
+    expect(hint.className).toContain('runDashboardColdError')
+    unmount()
+  })
+
+  it('refetches the timeline when only the catalog state sequence changes', async () => {
+    fetchQueue = [baseTimeline, { ...baseTimeline, asOfSeq: 11 }]
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+    await act(async () => {})
+    expect(fetchCalls).toEqual(['agents.timeline'])
+
+    const current = list.getSnapshot()
+    list.set({
+      ...current,
+      subagentsByParent: {
+        ...current.subagentsByParent,
+        root: { ...current.subagentsByParent!.root!, asOfSeq: 11 },
+      },
+    })
+    await act(async () => {})
+
+    expect(fetchCalls).toEqual(['agents.timeline', 'agents.timeline'])
+    unmount()
+  })
+
+  it('places the no-subagents message below the root session row', async () => {
+    fetchQueue = [{ ...baseTimeline, agents: [] }]
+    const snapshot = baseSnapshot()
+    const list = makeList({
+      ...snapshot,
+      byId: { root: snapshot.byId.root! },
+      subagentsByParent: {
+        root: {
+          state: 'ready',
+          parentAvailable: true,
+          error: null,
+          entries: [],
+        },
+      },
+    })
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+
+    await act(async () => {})
+
+    const rootRow = container.querySelector('[data-run-dashboard-row-id="root"]')
+    const emptyState = [...container.querySelectorAll('div')].find(element =>
+      element.firstElementChild?.textContent === '暂无子代理'
+      && element.lastElementChild?.textContent === '当前主代理派生的子代理将显示在这里',
+    )
+    expect(rootRow).not.toBeNull()
+    expect(emptyState).toBeDefined()
+    expect(rootRow!.compareDocumentPosition(emptyState!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    unmount()
+  })
+
+  it('shows the effective model name and reasoning effort on agent cards by default', async () => {
+    fetchQueue = [{
+      ...baseTimeline,
+      agents: [{
+        ...baseTimeline.agents[0]!,
+        modelSelection: { provider: 'deepseek', model: 'gpt-5.5', reasoningEffort: 'high' },
+      }],
+    }]
+    const list = makeList(baseSnapshot())
+    const store = createSidebarStore()
+    store.setSession('root')
+    const { container, unmount } = mount(
+      createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+    )
+
+    await act(async () => {})
+
+    const card = container.querySelector('[data-run-dashboard-row-id="child"]')
+    expect(card?.textContent).toContain('gpt-5.5')
+    expect(card?.textContent).toContain('high')
     unmount()
   })
 
@@ -357,6 +556,70 @@ describe('Run Dashboard view', () => {
     unmount()
   })
 
+  it('fits all to the viewport: the drawn activity fills the panel and the blank tail stays off-screen', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(20_000)
+    try {
+      const snapshot = baseSnapshot()
+      snapshot.byId.root = { ...snapshot.byId.root!, running: false }
+      const list = makeList(snapshot)
+      const store = wideStore()
+      const { container, unmount } = mount(
+        createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+      )
+      await act(async () => {})
+      const scroller = container.querySelector('[data-timeline-scroller]') as HTMLElement
+      scroller.scrollLeft = 40
+
+      const fit = container.querySelector('button[aria-label="适配全部"]') as HTMLButtonElement
+      await act(async () => { fit.click() })
+
+      // The range runs to now=20_000 (the child's open cold tail) but drawn
+      // activity ends at the root's 10_000. Fit stretches the canvas until
+      // the active 9/19 of the range fills the stubbed 320px viewport minus
+      // the 24px trailing padding; the blank tail scrolls off to the right.
+      const width = Number((container.querySelector('[data-timeline-canvas]') as HTMLElement).dataset.timelineWidth)
+      expect(width).toBe(Math.round((19_000 / 9_000) * (320 - 24)))
+      expect(scroller.scrollLeft).toBe(0)
+      unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not widen a short non-instant segment past its real end', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(20_000)
+    try {
+      fetchQueue = [{
+        root: { sessionId: 'root', path: '/root', startedAt: 1_000, lastEventAt: 20_000 },
+        asOfSeq: 4,
+        agents: [{
+          ...baseTimeline.agents[0]!,
+          declaredAt: 1_000,
+          statePoints: [
+            { seq: 2, time: 1_050, transition: 'ready', state: { residency: 'live', turn: { kind: 'running' } } },
+            { seq: 3, time: 3_000, transition: 'became-cold', state: { residency: 'cold', lastTurn: 'idle' } },
+          ],
+        }],
+      }]
+      const list = makeList(baseSnapshot())
+      const store = createSidebarStore()
+      store.setSession('root')
+      const { container, unmount } = mount(
+        createElement(SubagentView, { sessionId: 'root', active: true, ctx: makeCtx(list), store }),
+      )
+      await act(async () => {})
+
+      const segment = container.querySelector<HTMLElement>(
+        '[data-run-dashboard-row-id="child"] [data-segment-state="provisioning"]',
+      )
+      expect(Number.parseFloat(segment?.style.width ?? '')).toBeCloseTo(0.263158, 6)
+      unmount()
+    } finally {
+      now.mockRestore()
+    }
+  })
+
   it('renders the mobile fallback list with the same row actions but without the shared gantt area', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true })
     fetchQueue = [{
@@ -380,12 +643,13 @@ describe('Run Dashboard view', () => {
     const store = createSidebarStore()
     store.setSession('root')
     const openChild = vi.fn()
+    const openSubagent = vi.fn()
     const interruptSubagent = vi.fn(async () => 'accepted' as const)
     const { container, unmount } = mount(
       createElement(SubagentView, {
         sessionId: 'root',
         active: true,
-        ctx: makeCtx(list, () => {}, { interruptSubagent } as Partial<Context['sessions']>),
+        ctx: makeCtx(list, () => {}, { interruptSubagent, openSubagent } as Partial<Context['sessions']>),
         store,
         onOpenChild: openChild,
       }),
@@ -403,6 +667,13 @@ describe('Run Dashboard view', () => {
       ;(container.querySelector('button[aria-label="打开聊天 worker"]') as HTMLButtonElement).click()
     })
     expect(openChild).toHaveBeenCalledWith({
+      parentSessionId: 'root',
+      childSessionId: 'child',
+      mode: 'continuable',
+    })
+    // The shell hook only ARMS the jump-back; the official switch must still
+    // fire or the button is a no-op.
+    expect(openSubagent).toHaveBeenCalledWith({
       parentSessionId: 'root',
       childSessionId: 'child',
       mode: 'continuable',
@@ -887,30 +1158,30 @@ describe('Run Dashboard view', () => {
       },
     ]
     const list = makeList(baseSnapshot())
-    const interruptSubagent = vi.fn(async () => 'accepted' as const)
-    const closeSubagent = vi.fn(async () => 'closed' as const)
+    const interruptSubagent = vi.fn(async function (this: { bindingToken?: string }) {
+      expect(this.bindingToken).toBe('sessions-service')
+      return 'accepted' as const
+    })
+    const closeSubagent = vi.fn(async function (this: { bindingToken?: string }) {
+      expect(this.bindingToken).toBe('sessions-service')
+      return 'closed' as const
+    })
+    const controls = {
+      bindingToken: 'sessions-service',
+      interruptSubagent,
+      closeSubagent,
+    } as unknown as Partial<Context['sessions']>
     const store = createSidebarStore()
     store.setSession('root')
     const { container, unmount } = mount(
       createElement(SubagentView, {
         sessionId: 'root',
         active: true,
-        ctx: makeCtx(list, () => {}, { interruptSubagent, closeSubagent } as Partial<Context['sessions']>),
+        ctx: makeCtx(list, () => {}, controls),
         store,
       }),
     )
     await act(async () => {})
-
-    await act(async () => {
-      ;(container.querySelector('button[aria-label="中断 worker"]') as HTMLButtonElement).click()
-    })
-    await act(async () => {})
-    expect(interruptSubagent).toHaveBeenCalledWith({
-      parentSessionId: 'root',
-      childSessionId: 'child',
-      mode: 'continuable',
-    })
-    expect(container.textContent).toContain('已请求中断代理')
 
     await act(async () => {
       ;(container.querySelector('button[aria-label="关闭 worker"]') as HTMLButtonElement).click()
@@ -932,6 +1203,17 @@ describe('Run Dashboard view', () => {
       mode: 'continuable',
     }, expect.any(String))
     expect(container.textContent).toContain('代理已关闭')
+
+    await act(async () => {
+      ;(container.querySelector('button[aria-label="中断 worker"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+    expect(interruptSubagent).toHaveBeenCalledWith({
+      parentSessionId: 'root',
+      childSessionId: 'child',
+      mode: 'continuable',
+    })
+    expect(container.textContent).toContain('已请求中断代理')
     expect(container.textContent).not.toContain('restart')
     expect(container.textContent).not.toContain('重新运行')
     unmount()
@@ -1024,8 +1306,8 @@ describe('Run Dashboard view', () => {
     // greyscale and colour-blind rendering.
     const marks = [...container.querySelectorAll<HTMLElement>('[data-run-dashboard-row-id] [data-shape]')]
     expect(marks.map(mark => mark.dataset.shape)).toEqual(['running', 'cold'])
-    // Word channel: the active root spells its state beside the duration; the
-    // settled child keeps the word for readers and tooltips instead of the row.
+    // Word channel: active and settled rows both spell their current state
+    // beside the duration; the tier changes colour, not visibility.
     const rootRow = container.querySelector('[data-run-dashboard-row-id="root"]') as HTMLElement
     const childRow = container.querySelector('[data-run-dashboard-row-id="child"]') as HTMLElement
     const rootStatus = rootRow.querySelector('[data-status-tier]') as HTMLElement
@@ -1033,8 +1315,8 @@ describe('Run Dashboard view', () => {
     expect(rootStatus.dataset.statusTier).toBe('active')
     expect(rootStatus.textContent).toContain('运行中')
     expect(childStatus.dataset.statusTier).toBe('muted')
-    expect(childStatus.textContent).toContain('已卸载')
-    expect(childStatus.title).toContain('已卸载')
+    expect(visibleStatusText(childRow)).toContain('已卸载')
+    expect(childStatus.title).toContain('活跃')
     unmount()
   })
 

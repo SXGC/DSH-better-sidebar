@@ -189,6 +189,7 @@ export interface SidebarSubagentDiagnosticEntry {
 
 /** The per-parent lazy catalog delivered through the sessions list feed. */
 export interface SidebarSubagentCatalog {
+  asOfSeq?: number
   entries: Array<SidebarSubagentChildEntry | SidebarSubagentDiagnosticEntry>
   parentAvailable: boolean
   state: 'loading' | 'ready' | 'error'

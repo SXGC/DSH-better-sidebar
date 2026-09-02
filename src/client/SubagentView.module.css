@@ -311,6 +311,9 @@
   left: 0;
   z-index: 1;
   min-width: 128px;
+  /* The column has a user-dragged width; anything a row fails to truncate
+     must clip HERE, never bleed over the splitter into the canvas. */
+  overflow: hidden;
   background: var(--dsw-alias-bg-base);
   border-right: 1px solid var(--dsw-alias-border-l1);
 }
@@ -502,7 +505,10 @@
 
 .runDashboardGrid .runDashboardRowSpan {
   position: static;
-  flex: none;
+  /* Shrinkable, or a narrow tree column lets the figures run over the
+     splitter into the gantt canvas; the tooltip keeps the full text. */
+  flex: 0 1 auto;
+  min-width: 0;
   width: auto;
   height: auto;
   margin: 0;
@@ -518,8 +524,8 @@
    Every state keeps a DISTINCT SHAPE (filled/dashed/hollow dot, check,
    cross, pause, slash, dashed square), so a greyscale screenshot or a
    colour-blind reader still tells them apart. The word rides the right-hand
-   status text: active/attention/error states always spell it; settled ones
-   keep only the duration and demote the word to tooltip + sr-only. */
+   status text. Every healthy row spells out the current state; colour only
+   reinforces the state tier. */
 
 .runDashboardMark {
   flex: none;
@@ -586,6 +592,11 @@
 
 .runDashboardRowStatus {
   flex: none;
+  /* Wraps to its own header line when wide; past a full column width it
+     truncates — the duration tooltip already spells the exact figures. */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font: var(--dsw-font-xxxs-strong-11);
   font-variant-numeric: tabular-nums;
   color: var(--dsw-alias-label-tertiary);
@@ -602,6 +613,10 @@
 
 .runDashboardRowStatus[data-status-tier="error"] {
   color: var(--dsw-alias-state-error-primary);
+}
+
+.runDashboardColdError {
+  color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 68%, var(--dsw-alias-label-tertiary));
 }
 
 /* ── Gantt bars ────────────────────────────────────────────────────────
@@ -649,10 +664,8 @@
   top: 0;
   bottom: 0;
   display: block;
-  min-width: 2px;
   overflow: hidden;
   box-sizing: border-box;
-  padding: 0 5px;
   box-shadow: inset -1px 0 0 var(--dsw-alias-bg-base);
   background-color: var(--dsw-alias-interactive-bg-active);
   color: var(--dsw-alias-label-primary);
@@ -717,14 +730,13 @@
   background-color: color-mix(in srgb, var(--dsw-alias-label-secondary) 16%, transparent);
 }
 
+/* End ticks are a solid dark mark, never a 1px stripe weave: a 3px stub
+   with 1px-on/4px-off stripes only ever shows one line, and that line
+   vanishes on the 1Hz now-tick as the shared range grows. */
 .runDashboardSegment[data-segment-state="cold"],
 .runDashboardSegment[data-segment-state="closed"] {
-  background-color: color-mix(in srgb, var(--dsw-alias-label-tertiary) 8%, transparent);
-  background-image: repeating-linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--dsw-alias-label-tertiary) 34%, transparent) 0 1px,
-    transparent 1px 5px
-  );
+  background-color: color-mix(in srgb, var(--dsw-alias-label-tertiary) 48%, transparent);
+  box-shadow: none;
   color: var(--dsw-alias-label-secondary);
 }
 

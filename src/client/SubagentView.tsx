@@ -44,6 +44,7 @@ import {
   formatAgentState,
   formatDuration,
   normalizeLongRunningMinutes,
+  timelineContentEnd,
   timelineTicks,
   type TimelineDisplay,
   type TimelineDisplayFilters,
@@ -360,6 +361,15 @@ const RUN_DASHBOARD_GANTT_MIN_PANEL = 520
 const TIMELINE_BASE_WIDTH = 600
 const TIMELINE_PAN_STEP = 64
 const TIMELINE_ZOOM_FACTOR = 1.25
+/**
+ * Zoom bounds shared by the buttons and fit-all. The ceiling must leave
+ * fit-all room to stretch a mostly-idle range (activity in the first hour,
+ * open tail running to now) until the ACTIVE part fills the viewport.
+ */
+const TIMELINE_MIN_ZOOM = 0.25
+const TIMELINE_MAX_ZOOM = 64
+/** Fit-all's breathing room after the last bar, so it never kisses the edge. */
+const TIMELINE_FIT_PADDING_PX = 24
 const TREE_KEYBOARD_STEP = 16
 /** Narrowest gantt bar that can carry its state word without clipping it. */
 const SEGMENT_LABEL_MIN_PX = 54
@@ -481,6 +491,28 @@ function timelineWidth(zoom: number): number {
   return Math.round(TIMELINE_BASE_WIDTH * zoom)
 }
 
+function clampZoom(zoom: number): number {
+  return Math.min(TIMELINE_MAX_ZOOM, Math.max(TIMELINE_MIN_ZOOM, zoom))
+}
+
+/**
+ * The zoom that makes the drawn activity span exactly fill a viewport (minus
+ * the trailing padding): range→content stretches the canvas past the blank
+ * tail, viewport→base scales it to the actual panel. Undefined when nothing
+ * is measured or drawn yet — the caller falls back to the neutral zoom.
+ */
+function fitZoom(
+  viewportPx: number,
+  range: TimelineDisplay['range'],
+  contentEnd: number | undefined,
+): number | undefined {
+  const viewport = viewportPx - TIMELINE_FIT_PADDING_PX
+  if (viewport <= 0 || range === null || contentEnd === undefined) return undefined
+  const span = Math.max(1, range.end - range.start)
+  const contentSpan = Math.max(1, Math.min(contentEnd, range.end) - range.start)
+  return clampZoom((span / contentSpan) * (viewport / TIMELINE_BASE_WIDTH))
+}
+
 /** A segment's placement on the shared range, in percent of the canvas. */
 function segmentGeometry(
   segment: TimelineSegment,
@@ -488,10 +520,12 @@ function segmentGeometry(
   now: number,
 ): { left: number; width: number } {
   const span = Math.max(1, range.end - range.start)
+  const duration = (segment.end ?? now) - segment.start
   return {
     left: ((segment.start - range.start) / span) * 100,
-    // A hairline minimum keeps instant transitions (a `closed` point) visible.
-    width: Math.max(0.5, (((segment.end ?? now) - segment.start) / span) * 100),
+    // Only a genuinely instant transition needs a hairline. Giving every
+    // short span the same minimum makes it extend over its next state.
+    width: duration === 0 ? 0.5 : Math.max(0, (duration / span) * 100),
   }
 }
 
@@ -513,29 +547,6 @@ function modelLabel(model: SpawnModelSelection | undefined): string {
 
 function forkTurnsLabel(value: AgentDetailResult['forkTurns']): string {
   return typeof value === 'number' ? String(value) : value
-}
-
-/**
- * The tree's dominant model label. Rows on the dominant model keep their
- * meta line empty (the detail panel still spells it); only a deviating
- * model earns a line of row space.
- */
-function dominantModelLabel(rows: readonly TimelineDisplayRow[]): string | undefined {
-  const counts = new Map<string, number>()
-  for (const row of rows) {
-    if (row.model === undefined) continue
-    const label = modelLabel(row.model)
-    counts.set(label, (counts.get(label) ?? 0) + 1)
-  }
-  let best: string | undefined
-  let bestCount = 0
-  for (const [label, count] of counts) {
-    if (count > bestCount) {
-      best = label
-      bestCount = count
-    }
-  }
-  return best
 }
 
 function operationId(): string {
@@ -623,6 +634,7 @@ function catalogSignature(
       id,
       summary?.running === true ? 'running' : 'idle',
       catalog?.state ?? 'missing',
+      catalog?.asOfSeq ?? 'unversioned',
       ...(catalog?.entries ?? []).map(entry => entry.kind === 'child'
         ? `${entry.id}:${entry.activity}:${entry.mode}:${entry.hasChildren ? 1 : 0}`
         : `${entry.id}:diagnostic:${entry.reason}`),
@@ -693,10 +705,8 @@ function agentMarkKind(row: TimelineDisplayRow): string {
 }
 
 /**
- * Attention tier of a state kind. Drives the colour of the right-hand status
- * text and whether the state word is spelled out on the row at all: settled
- * states ("silent") keep only the mark + duration, with the word demoted to
- * the tooltip and an sr-only span.
+ * Attention tier of a state kind. It drives only the colour of the right-hand
+ * status text; every healthy row still spells out its current state.
  */
 function statusTier(kind: string): 'active' | 'attention' | 'error' | 'muted' {
   switch (kind) {
@@ -711,11 +721,6 @@ function statusTier(kind: string): 'active' | 'attention' | 'error' | 'muted' {
     default:
       return 'muted'
   }
-}
-
-/** Settled states whose word lives in the tooltip, not on the row. */
-function statusWordSilent(kind: string): boolean {
-  return kind === 'completed' || kind === 'cold' || kind === 'closed'
 }
 
 /**
@@ -773,8 +778,6 @@ function RunDashboardTreeRow(props: {
   /** Draw the per-row spark strip (the list layout has no shared canvas). */
   range: TimelineDisplay['range'] | undefined
   now: number
-  /** The tree's dominant model label: an identical model stays off the row. */
-  baselineModel: string | undefined
   /** Whether this row's action buttons are revealed (click-toggled). */
   actionsOpen: boolean
   onToggleActions: (row: TimelineDisplayRow) => void
@@ -791,7 +794,6 @@ function RunDashboardTreeRow(props: {
     row,
     range,
     now,
-    baselineModel,
     actionsOpen,
     onToggleActions,
     selectedAgentId,
@@ -816,11 +818,9 @@ function RunDashboardTreeRow(props: {
   })
   const kind = agentMarkKind(row)
   const word = agentRowState(row)
-  const silent = statusWordSilent(kind)
   // The path lives in the title tooltip (the title IS the leaf); the meta
-  // line only spells a model that deviates from the tree's dominant one.
-  const model = row.model === undefined ? undefined : modelLabel(row.model)
-  const meta = model !== undefined && model !== baselineModel ? model : ''
+  // line always spells the effective model selection for an agent card.
+  const meta = row.model === undefined ? '' : modelLabel(row.model)
   const span = row.kind === 'diagnostic'
     ? t('runDashboardTimeUnavailable')
     : `${formatTime(row.startedAt)} → ${row.endedAt === undefined ? t('runDashboardRunning') : formatTime(row.endedAt)}`
@@ -857,11 +857,23 @@ function RunDashboardTreeRow(props: {
         <span
           className={css.runDashboardRowStatus}
           data-status-tier={statusTier(kind)}
-          title={silent ? `${word} · ${durationTitle}` : durationTitle}
+          title={durationTitle}
         >
           <span className={css.runDashboardSrOnly}>{t('runDashboardActiveDuration')} </span>
-          {row.kind === 'diagnostic' ? word : silent ? active : `${word} · ${active}`}
-          {silent && <span className={css.runDashboardSrOnly}> {word}</span>}
+          {row.kind === 'diagnostic' ? word : (
+            <>
+              {word}
+              {row.state?.residency === 'cold' && row.state.lastTurn === 'errored' && (
+                <>
+                  {' · '}
+                  <span className={css.runDashboardColdError} data-cold-error>
+                    {isZh() ? '上次已出错' : 'last Errored'}
+                  </span>
+                </>
+              )}
+              {' · '}{active}
+            </>
+          )}
         </span>
         {row.kind === 'agent' && (
           <span
@@ -1025,7 +1037,6 @@ function RunDashboardRows(props: {
   const dragStartRef = useRef<{ x: number; width: number } | null>(null)
   const treeRef = useRef<HTMLDivElement>(null)
   const laneHeights = useLaneHeights(treeRef, display.rows.map(row => row.id).join('\u0000'))
-  const baselineModel = useMemo(() => dominantModelLabel(display.rows), [display.rows])
   const ticks = useMemo(() => timelineTicks(range, width), [range, width])
   const tickStep = ticks.length > 1 ? ticks[1]!.time - ticks[0]!.time : 60_000
 
@@ -1060,7 +1071,6 @@ function RunDashboardRows(props: {
             row={row}
             range={undefined}
             now={now}
-            baselineModel={baselineModel}
             actionsOpen={openActionsId === row.id}
             onToggleActions={onToggleActions}
             selectedAgentId={selectedAgentId}
@@ -1170,7 +1180,6 @@ function RunDashboardList(props: {
   onInterruptAgent: (row: TimelineDisplayRow) => void
   onCloseAgent: (row: TimelineDisplayRow) => void
 }) {
-  const baselineModel = useMemo(() => dominantModelLabel(props.display.rows), [props.display.rows])
   return (
     <div data-run-dashboard-list className={css.runDashboardList} role="treegrid" aria-label={t('subagent')}>
       {props.display.rows.map(row => (
@@ -1179,7 +1188,6 @@ function RunDashboardList(props: {
           row={row}
           range={props.display.range}
           now={props.now}
-          baselineModel={baselineModel}
           actionsOpen={props.openActionsId === row.id}
           onToggleActions={props.onToggleActions}
           selectedAgentId={props.selectedAgentId}
@@ -1441,8 +1449,17 @@ export function SubagentView(props: {
   const openAgent = useCallback((row: TimelineDisplayRow): void => {
     const address = agentAddress(row)
     if (address === undefined) return
+    // Notify the shell FIRST (it arms the jump-back so the Run Dashboard
+    // re-opens on top of the child's own layout), then perform the actual
+    // conversation switch. The hook only records intent — it never opens the
+    // child itself, so `openSubagent` must run in BOTH cases or the button
+    // does nothing.
     onOpenChild?.(address)
-    if (onOpenChild === undefined) ctx.sessions.openSubagent?.(address)
+    try {
+      ctx.sessions.openSubagent?.(address)
+    } catch (error) {
+      console.warn('[dsh-better-sidebar] openSubagent failed:', error)
+    }
   }, [ctx.sessions, onOpenChild])
 
   const runAgentControl = useCallback(async (
@@ -1459,19 +1476,17 @@ export function SubagentView(props: {
     try {
       let outcome: SidebarSubagentControlOutcome
       if (action === 'interrupt') {
-        const interrupt = ctx.sessions.interruptSubagent
-        if (interrupt === undefined) {
+        if (ctx.sessions.interruptSubagent === undefined) {
           setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'failed' })
           return
         }
-        outcome = await interrupt(address)
+        outcome = await ctx.sessions.interruptSubagent(address)
       } else {
-        const close = ctx.sessions.closeSubagent
-        if (close === undefined) {
+        if (ctx.sessions.closeSubagent === undefined) {
           setControlState({ kind: 'error', agentSessionId: row.id, action, outcome: 'failed' })
           return
         }
-        outcome = await close(address, operationId())
+        outcome = await ctx.sessions.closeSubagent(address, operationId())
       }
       setControlState({
         kind: outcome === 'accepted' || outcome === 'closed' ? 'done' : 'error',
@@ -1561,7 +1576,7 @@ export function SubagentView(props: {
     const oldWidth = timelineWidth(zoom)
     const anchor = scroller === null ? 0 : scroller.clientWidth / 2
     const ratio = scroller === null ? 0 : (scroller.scrollLeft + anchor) / oldWidth
-    const nextZoom = Math.min(8, Math.max(0.25, zoom * factor))
+    const nextZoom = clampZoom(zoom * factor)
     setZoom(nextZoom)
     if (scroller !== null) {
       cancelZoomFrame()
@@ -1575,9 +1590,15 @@ export function SubagentView(props: {
   const zoomOut = useCallback((): void => { zoomBy(1 / TIMELINE_ZOOM_FACTOR) }, [zoomBy])
   const fitAll = useCallback((): void => {
     cancelZoomFrame()
-    setZoom(1)
-    scrollerRef.current?.scrollTo({ left: 0 })
-  }, [cancelZoomFrame])
+    const scroller = scrollerRef.current
+    const rows = filteredDisplay?.rows
+    setZoom(fitZoom(
+      scroller?.clientWidth ?? 0,
+      filteredDisplay?.range ?? null,
+      rows === undefined ? undefined : timelineContentEnd(rows, now),
+    ) ?? 1)
+    scroller?.scrollTo({ left: 0 })
+  }, [cancelZoomFrame, filteredDisplay, now])
   const panRight = useCallback((): void => {
     cancelZoomFrame()
     const scroller = scrollerRef.current
@@ -1662,12 +1683,6 @@ export function SubagentView(props: {
             </button>
           </div>
         )}
-        {filteredDisplay !== undefined && filteredDisplay.rows.length === 1 && (
-          <div className={css.subagentEmpty}>
-            <div>{t('subagentEmpty')}</div>
-            <div className={css.subagentEmptyHint}>{t('subagentEmptyDesc')}</div>
-          </div>
-        )}
         {filteredDisplay !== undefined && (layout === 'list'
           ? (
             <RunDashboardList
@@ -1706,6 +1721,12 @@ export function SubagentView(props: {
               onCloseAgent={closeAgent}
             />
           ))}
+        {filteredDisplay !== undefined && filteredDisplay.rows.length === 1 && (
+          <div className={css.subagentEmpty}>
+            <div>{t('subagentEmpty')}</div>
+            <div className={css.subagentEmptyHint}>{t('subagentEmptyDesc')}</div>
+          </div>
+        )}
         <JobsSection
           byId={byId}
           jobsBySession={list.jobsBySession}

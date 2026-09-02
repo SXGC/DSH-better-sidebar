@@ -1,9 +1,9 @@
 /**
- * Recursive file-name search for the editor's merged-mode side panel. Native
- * file listing is preferred when available, with the original opendir walk as
- * the fallback. The query is a case-insensitive substring of each entry's
- * NAME (paths stay relative to the search root — the client resolves them
- * against the session cwd). No engine applies .gitignore semantics; known
+ * Recursive file search for the editor's merged-mode side panel. Native file
+ * listing is preferred when available, with the original opendir walk as the
+ * fallback. A query without separators is a case-insensitive substring of each
+ * entry's NAME; a query containing '/' or '\\' is a case-insensitive suffix of
+ * the root-relative path. No engine applies .gitignore semantics; known
  * noise directories are skipped outright and symlink directories are not
  * followed.
  *
@@ -71,6 +71,12 @@ interface DetectionState {
 interface NativeSearchAttempt {
   result?: FsSearchResult
   missing: boolean
+}
+
+interface SearchQuery {
+  needle: string
+  native: string
+  pathSuffix: boolean
 }
 
 const detectionStates = new WeakMap<RunCommand, WeakMap<ResolvePackagedRg, DetectionState>>()
@@ -255,25 +261,42 @@ const RG_ARGS = [
   '--null',
 ] as const
 
+/** Normalize one user query for native and in-process matching. */
+function parseQuery(query: string): SearchQuery {
+  const native = query.trim().replaceAll('\\', '/')
+  return {
+    native,
+    needle: native.toLowerCase(),
+    pathSuffix: native.includes('/'),
+  }
+}
+
+/** Apply file-name or relative-path suffix semantics to one normalized path. */
+function matchesQuery(path: string, query: SearchQuery): boolean {
+  const normalized = path.replaceAll('\\', '/')
+  if (query.pathSuffix) return normalized.toLowerCase().endsWith(query.needle)
+  return normalized.split('/').at(-1)!.toLowerCase().includes(query.needle)
+}
+
 /** List matching entries with fd using the same name semantics as the JS walk. */
 async function searchWithFd(
   command: 'fd' | 'fdfind',
   root: string,
-  query: string,
+  query: SearchQuery,
   maxMatches: number,
   run: RunCommand,
 ): Promise<NativeSearchAttempt> {
   const args = [
     '-H',
     '--no-ignore',
-    '-F',
+    ...query.pathSuffix ? ['--full-path'] : ['-F'],
     '-i',
     '--print0',
     ...FD_EXCLUDE_ARGS,
     '--max-results',
     String(maxMatches),
     '--',
-    query,
+    query.pathSuffix ? `${query.native.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$` : query.native,
     '.',
   ]
   let result: Awaited<ReturnType<RunCommand>>
@@ -296,7 +319,7 @@ async function searchWithFd(
 async function searchWithRg(
   command: string,
   root: string,
-  needle: string,
+  query: SearchQuery,
   maxMatches: number,
   run: RunCommand,
 ): Promise<NativeSearchAttempt> {
@@ -315,14 +338,16 @@ async function searchWithRg(
     if (normalized === '') continue
     const segments = normalized.split('/')
     for (let index = 0; index < segments.length; index += 1) {
-      if (!segments[index]!.toLowerCase().includes(needle)) continue
-      matches.add(segments.slice(0, index + 1).join('/'))
-      if (matches.size >= maxMatches) {
-        truncated = true
-        break
-      }
+      const candidate = segments.slice(0, index + 1).join('/')
+      if (query.pathSuffix
+        ? matchesQuery(candidate, query)
+        : segments[index]!.toLowerCase().includes(query.needle)) matches.add(candidate)
+      if (matches.size >= maxMatches) break
     }
-    if (truncated) break
+    if (matches.size >= maxMatches) {
+      truncated = true
+      break
+    }
   }
   return { result: { matches: [...matches].sort(), truncated }, missing: false }
 }
@@ -330,7 +355,7 @@ async function searchWithRg(
 /** Try packaged then PATH ripgrep for a forced engine or fd fallback. */
 async function searchRgChain(
   root: string,
-  needle: string,
+  query: SearchQuery,
   maxMatches: number,
   run: RunCommand,
   resolveRg: ResolvePackagedRg,
@@ -341,7 +366,7 @@ async function searchRgChain(
   if (!skipPackaged) {
     const rgPath = await resolvePackagedRgCached(resolveRg)
     if (rgPath !== null && !state.unavailable.has(rgPath)) {
-      const attempt = await searchWithRg(rgPath, root, needle, maxMatches, run)
+      const attempt = await searchWithRg(rgPath, root, query, maxMatches, run)
       if (attempt.result !== undefined) {
         reportEngine(state, 'packaged-rg', onEngineSelected)
         return attempt.result
@@ -357,25 +382,25 @@ async function searchRgChain(
     state.unavailable.add('rg')
     return undefined
   }
-  const attempt = await searchWithRg('rg', root, needle, maxMatches, run)
+  const attempt = await searchWithRg('rg', root, query, maxMatches, run)
   if (attempt.missing) state.unavailable.add('rg')
   if (attempt.result !== undefined) reportEngine(state, 'path-rg', onEngineSelected)
   return attempt.result
 }
 
 /**
- * Search `root` recursively for entries whose name contains `query`
- * (case-insensitive).
+ * Search `root` recursively by entry-name substring or relative-path suffix.
+ * Matching is case-insensitive.
  * @param root - absolute search root.
- * @param query - the name substring; empty matches nothing.
+ * @param query - name substring, or path suffix when it contains a separator; empty matches nothing.
  * @param opts - budget overrides and injectable native-engine seams.
  * @returns the matching paths RELATIVE to `root` ('/'-separated), sorted,
  *  plus whether a budget cut the walk short. An unreadable level is skipped
  *  (permission errors never fail the whole search).
  */
 export async function searchFiles(root: string, query: string, opts: FsSearchOptions = {}): Promise<FsSearchResult> {
-  const needle = query.trim().toLowerCase()
-  if (needle === '') return { matches: [], truncated: false }
+  const parsedQuery = parseQuery(query)
+  if (parsedQuery.needle === '') return { matches: [], truncated: false }
   const maxMatches = opts.maxMatches ?? DEFAULT_MAX_MATCHES
   const maxVisited = opts.maxVisited ?? DEFAULT_MAX_VISITED
   const run = opts.runCommand ?? runCommand
@@ -388,8 +413,8 @@ export async function searchFiles(root: string, query: string, opts: FsSearchOpt
         const detected = await detectEngineCached(run, resolveRg)
         if (detected.kind === 'js') break
         const attempt = detected.kind === 'fd'
-          ? await searchWithFd(detected.command, root, query.trim(), maxMatches, run)
-          : await searchWithRg(detected.command, root, needle, maxMatches, run)
+          ? await searchWithFd(detected.command, root, parsedQuery, maxMatches, run)
+          : await searchWithRg(detected.command, root, parsedQuery, maxMatches, run)
         if (attempt.result !== undefined) {
           reportEngine(
             state,
@@ -405,24 +430,24 @@ export async function searchFiles(root: string, query: string, opts: FsSearchOpt
           continue
         }
         if (detected.kind === 'fd') {
-          const fallback = await searchRgChain(root, needle, maxMatches, run, resolveRg, false, opts.onEngineSelected)
+          const fallback = await searchRgChain(root, parsedQuery, maxMatches, run, resolveRg, false, opts.onEngineSelected)
           if (fallback !== undefined) return fallback
         } else if (detected.command !== 'rg') {
-          const fallback = await searchRgChain(root, needle, maxMatches, run, resolveRg, true, opts.onEngineSelected)
+          const fallback = await searchRgChain(root, parsedQuery, maxMatches, run, resolveRg, true, opts.onEngineSelected)
           if (fallback !== undefined) return fallback
         }
         break
       }
     } else {
       if (opts.engine === 'fd') {
-        const attempt = await searchWithFd('fd', root, query.trim(), maxMatches, run)
+        const attempt = await searchWithFd('fd', root, parsedQuery, maxMatches, run)
         if (attempt.result !== undefined) {
           reportEngine(state, 'fd', opts.onEngineSelected)
           return attempt.result
         }
         if (attempt.missing) invalidateCommand(run, resolveRg, 'fd')
       }
-      const result = await searchRgChain(root, needle, maxMatches, run, resolveRg, false, opts.onEngineSelected)
+      const result = await searchRgChain(root, parsedQuery, maxMatches, run, resolveRg, false, opts.onEngineSelected)
       if (result !== undefined) return result
     }
   }
@@ -444,8 +469,10 @@ export async function searchFiles(root: string, query: string, opts: FsSearchOpt
       }
       // Dependency / VCS / build-output forests: never matched, never descended.
       if (dirent.isDirectory() && SEARCH_SKIP_DIRS.has(dirent.name.toLowerCase())) continue
-      if (dirent.name.toLowerCase().includes(needle)) {
-        matches.push(join(relative(root, dir), dirent.name))
+      const relativePath = join(relative(root, dir), dirent.name)
+      const candidate = relativePath.split(sep).join('/')
+      if (matchesQuery(candidate, parsedQuery)) {
+        matches.push(relativePath)
         if (matches.length >= maxMatches) {
           truncated = true
           return
