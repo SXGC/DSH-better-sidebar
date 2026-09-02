@@ -1,90 +1,93 @@
-# 终端延迟初始化（零尺寸容器 xterm open 崩溃修复）设计
+# 终端尺寸同步设计
 
 **日期**：2026-08-14
-**状态**：已实施（本文档含实施偏差记录）
-**目标版本**：v0.11.x（issue #25 修复）
+**状态**：已实施（2026-08-27 更新隐藏与恢复规则）
+**目标版本**：v0.11.x 起；隐藏恢复修复 AGENT-387
 
 ## 1. 目标
 
-修复 [issue #25](https://github.com/omdsh-dev/DSH-better-sidebar/issues/25)：WKWebView 下点击「展开底部面板」后底部面板内容空白、无终端，控制台报 `Cannot read properties of undefined (reading 'dimensions')` 与 `(reading 'handleResize')`。
+最初修复 [issue #25](https://github.com/omdsh-dev/DSH-better-sidebar/issues/25)：xterm 在零尺寸容器中 `open()` 会导致渲染器初始化失败。后续确认仅延迟初次 `open()` 不足以保护已打开的终端：非活动 Tab、折叠右栏或折叠底栏使用隐藏布局时，现有 `ResizeObserver` 仍会调用 `FitAddon.fit()`，把网格压缩为 `2×1` 等过渡尺寸并同步给 PTY。
 
-根因：`TerminalView` 的挂载 effect 在容器可能为零尺寸时**同步**执行 `term.open(host); fit.fit()`。xterm 5.3.0 在零尺寸容器里 open 时渲染器创建失败，`RenderService._renderer.value` 保持 undefined，随后 Viewport 的 `_innerRefresh` 读 `_renderService.dimensions`（getter 即 `_renderer.value.dimensions`）崩溃。Chrome（Blink）对零尺寸布局更宽容所以不崩；WKWebView 稳定复现。
+当前设计必须同时保证：
 
-修复：把 `term.open(host)` + `fit.fit()` 推迟到容器有实际尺寸之后再执行（xterm 在隐藏/零尺寸容器初始化的标准修法），open 恰好执行一次。
+- 初始零尺寸时不调用 `term.open()`；
+- 不可见时不调用 `fit()`，保留最后一次有效网格；
+- 重新显示后等待容器尺寸稳定，再同步 xterm 与 PTY；
+- 活动终端拖动、字体调整和自由窗口缩放仍按帧实时更新；
+- WebSocket、输出解析、session 切换、PTY park、重连和关闭语义不变。
 
-## 2. 非目标
+## 2. 根因
 
-- 不换 xterm 渲染器（打包产物只有 DomRenderer 是现状，不是本次根因；`rendererType` 保持默认）。
-- 不改 pty / WS / 终端连接生命周期：推迟 open 不推迟连接、不重启 shell、不丢 transcript。
-- 不改 host 半与 chunk 打包结构（新模块随 terminal chunk 打入 `lib/client-terminal.js`）。
-- 不 bump 版本号（release 流程负责）。
+旧方案 `openWhenSized` 只处理一次性初始化：它在 host 首次出现正尺寸后执行 `term.open()` 和 `fit()`，随后退出。它没有控制后续 `ResizeObserver` 和字体订阅中的 `fit()`。
 
-## 3. 现状回顾
+终端 Tab 实例在非活动状态继续挂载，但祖先通过 `display: none` 隐藏。此时 FitAddon 会把零尺寸容器钳制为极小网格。隐藏期间 WebSocket 仍向 xterm 写入输出；Git 等程序用 `\r` 覆盖进度行时，极小列宽会把逻辑行拆成大量软换行。恢复正常宽度只能重排已经损坏的行，不能恢复原覆盖语义。
 
-- `src/client/TerminalView.tsx` 第 99–101 行同步 `term.open(host); fit.fit()`。
-- 零尺寸挂载路径真实存在且不止一条：
-  - 底部面板首次展开自动开终端（`Sidebar.tsx` 的 `bottomOpenedOnce` effect）在面板 slide-in transition 的同一次 commit 挂载 TerminalView，WKWebView 下此刻 host 高度为 0；
-  - 所有 tab 保持挂载（`split-pane.tsx`：非激活 tab 用 `.paneTabHidden { display: none }` 隐藏），面板折叠时保持挂载（`.panelHidden`）——任何 `display:none` / 零尺寸祖先都会踩同一坑。
-- 前提已验证（xterm 5.3.0 与 @xterm/addon-fit 0.10.0 源码）：
-  - `FitAddon.fit()` 在 open 之前是安全 no-op（`proposeDimensions` 先查 `this._terminal.element`，undefined 即返回）。
-  - `WriteBuffer.write()` 不依赖 open 状态：数据解析进 buffer，open 后渲染——推迟 open 不丢初始 transcript。
-  - `TerminalView` 已有的 ResizeObserver / 字体订阅里的 `fit.fit()` 在 open 前 no-op、open 后照常 re-fit，无需改动。
+因此“现有 ResizeObserver 无需改动”的旧结论不再成立。
 
-## 4. 设计
+## 3. 设计
 
-### 4.1 新模块 `src/client/open-when-sized.ts`（纯逻辑，可单测）
+### 3.1 `terminal-fit-controller`
 
-```ts
-export function openWhenSized(
-  host: HTMLElement,
-  open: () => void,
-  raf: (cb: FrameRequestCallback) => number = requestAnimationFrame,
-  caf: (id: number) => void = cancelAnimationFrame,
-): () => void
-```
+`src/client/terminal-fit-controller.ts` 是 DOM、xterm 与 WebSocket 之间的内部尺寸控制器。adapter 提供测量、连接状态、`open()`、`fit()`、当前网格、PTY resize 和 animation frame 调度。
 
-- 单条代码路径：`raf(step)` → step 检查 `host.isConnected`（false 则停止，防卸载后空转）→ `clientWidth > 0 && clientHeight > 0` 则调 `open()` 并停止；否则再排一帧。
-- 返回 cancel：`caf(frame)` 并置空（幂等），cleanup 调用。
-- helper 不 try/catch（保持纯净），异常由调用方处理。
+控制器状态：
 
-### 4.2 消费点 `src/client/TerminalView.tsx`
+- `hidden`：不 open、不 fit、不发送 resize；`requestFit()` 只延后需求。
+- `settling`：可见但等待尺寸稳定；无效尺寸或新的 resize 请求都会重启等待。
+- `ready`：已打开且有有效尺寸；活动 resize 在同一 animation frame 合并。
+- `disposed`：取消 frame，后续操作均为 no-op。
 
-- 移除 effect 顶部的 `term.open(host); fit.fit()`（保留 `term.loadAddon(fit)`）。
-- 在 effect 尾部（`sendResize` / `connect` 定义之后、`connect()` 调用之前）注册：
+### 3.2 稳定恢复
 
-```ts
-const cancelOpen = openWhenSized(host, () => {
-  try {
-    term.open(host)
-    fit.fit()
-    sendResize()
-  } catch (error) {
-    console.error('[dsh-better-sidebar] xterm open failed:', error)
-  }
-})
-```
+初次可见或 `hidden → visible` 后进入 `settling`。只有同时满足以下条件才执行一次 open/fit：
 
-- 回调里补 `sendResize()`：推迟路径下 socket 可能已先连上（`connect()` 在 effect 尾部同步调用），open+fit 后必须把真实 cols/rows 发出去，否则 pty 停留在默认 80x24 直到下次 resize；已尺寸快速路径下 socket 尚未 open，`sendResize` 内部守卫（`readyState === OPEN`）自然 no-op，无行为变化。
-- cleanup 里在 `term.dispose()` 前加 `cancelOpen()`。
-- 其余（connect / observer / fontSub / schemeSub / onData / 主题）不动。
+1. 仍可见；
+2. host 仍连接到 document；
+3. 宽高都大于零；
+4. 连续两个 animation frame 没有新的 resize 请求；
+5. 两次测量宽高相同。
+
+每次新的 resize 请求递增 generation 并取消旧 frame，旧 callback 不能提交过渡尺寸。`term.open()` 最多执行一次。
+
+### 3.3 活动缩放
+
+进入 `ready` 后，多个 `requestFit()` 合并到一个 animation frame。执行时再次验证 host 连接和正尺寸，然后调用 `fit()`。只有 xterm 的 `cols` 或 `rows` 真正改变时才发送 PTY resize。
+
+这条路径用于活动面板拖动、字体变化和自由窗口缩放，不等待两个稳定 frame，因此保持原有实时反馈。
+
+### 3.4 隐藏期间输出
+
+可见性来自已有 `TabComponentProps.visible`，由 terminal descriptor 原样传入 `TerminalView`。`visible` 变化只调用控制器，不重建 xterm、FitAddon、WebSocket、ResizeObserver 或 PTY session。
+
+隐藏时 WebSocket 和 `term.write()` 继续工作，但不改变网格。xterm 使用最后一次有效列宽解释 `\r` 进度输出；从未获得有效尺寸的终端保留默认 `80×24`。
+
+### 3.5 WebSocket resize
+
+控制器只提交经过验证且去重的实际网格。若 fit 发生在 WebSocket 建立前，`TerminalView` 缓存该网格，并在 `onopen` 时补发；连接建立时不再无条件发送 xterm 默认尺寸。消息 schema 保持 `{ type: 'resize', cols, rows }`。
+
+## 4. 生命周期边界
+
+- 主 React effect 依赖仍为 session、cwd、tabId 和 store；`visible` 不触发终端重建。
+- 独立 effect 调用 `controller.setVisible(visible)`。
+- cleanup 先 dispose 控制器并取消 frame，再维持原有 observer、订阅、socket 和 xterm 清理顺序。
+- tab 关闭发送 `close`、session 切换发送 `park`、同 session 卸载依赖 reconnect grace 的判断不变。
+- adapter 调用处继续隔离 xterm dispose 竞态。
 
 ## 5. 测试
 
-`tests/open-when-sized.spec.ts`（jsdom + 注入手动步进的假 raf/caf；`Object.defineProperty` 桩 `clientWidth/clientHeight`；`appendChild/remove` 控制 `isConnected`）：
+`tests/terminal-fit-controller.spec.ts` 覆盖：
 
-1. 已尺寸 → tick 一次后 open 恰好一次，之后不再排帧；
-2. 零尺寸 → 多次 tick 不 open，设尺寸后下一次 tick open 一次，后续 tick 不重复；
-3. 只有一维缺失 → 补齐后 open；
-4. cancel 后永不 open、无残留帧、cancel 幂等；
-5. host 脱离文档 → 轮询停止、不 open；
-6. open 抛错 → 异常向调用方传播（调用方负责 try/catch），不重复调用。
+- 初始隐藏和初始零尺寸；
+- 已打开终端隐藏后保持网格；
+- 变化尺寸后的两帧稳定恢复；
+- 恢复期间快速再次隐藏；
+- 活动 resize 合并和重复网格过滤；
+- 隐藏字体变化延后、可见字体变化按帧执行；
+- detached host、幂等 dispose 和 frame 清理；
+- 真实 `@xterm/xterm` buffer 中 Git 风格 `\r` 进度不串接且不产生软换行。
 
-## 6. 限制与取舍
+`tests/lazy-chunk.spec.tsx` 守护 terminal descriptor 的 `scope`、`store`、`tabId` 和 `visible` 映射。原 `open-when-sized.ts` 及其测试由控制器和上述测试取代。
 
-- rAF 轮询在 host 长期隐藏（`display:none` 祖先）期间持续排帧，每帧只读两个属性，开销可忽略；open 后立即停止。用 ResizeObserver 触发也可行，但轮询是 issue 中建议的标准修法，且不依赖 observer 对 transition 中间态的回调时序。
-- 已尺寸快速路径比原行为晚一帧（rAF 回调时机），无感知差异。
-- 若容器永远零尺寸（异常布局），终端永不 open、不崩溃——对不可见内容是可接受的降级。
+## 6. 限制
 
-## 7. 实施偏差记录
-
-无（按设计实施）。
+终端隐藏期间若 viewport 改变，PTY 暂时保留旧的有效尺寸；显示后才同步最终尺寸。这是有意行为，旧有效网格优于不可见或动画中的过渡网格。恢复同步至少延迟两个 animation frame，但不停止终端进程、WebSocket 或输出解析。

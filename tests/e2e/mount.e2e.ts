@@ -401,16 +401,70 @@ test('plugin mounts into the DSH shell and survives a built-in tab sweep', async
   // sweep. A failure anywhere surfaces as a pageerror or a console error,
   // both of which the next assertion sees.
   const newTabButton = sidebar.getByRole('button', { name: 'New tab' }).first()
+  const stripTabs = sidebar.locator('[class*="tabList"] > [draggable="true"]')
+  let terminalTabIndex = -1
   for (const title of BUILTIN_TABS) {
     await newTabButton.click()
     const item = page.getByRole('menuitem', { name: title }).first()
     await expect(item, `built-in tab "${title}" is not offered by the + menu — descriptor removed or its label changed`).toHaveCount(1)
     await item.click()
+    if (title === 'Terminal') {
+      await expect(sidebar.locator('.xterm:visible'), 'the created terminal must finish mounting').toHaveCount(1, { timeout: 30_000 })
+      terminalTabIndex = await stripTabs.count() - 1
+    }
     // Let the activation commit (including any lazy-chunk fetch) before the
     // crash assertions run.
     await page.waitForTimeout(1_500)
     await assertNoCrash()
   }
+
+  // AGENT-387 / THR-01: keep the already-created real PTY busy with carriage-
+  // return progress while its mounted xterm is hidden behind the Files tab.
+  // Disable echo and clear the typed command before printing so the xterm DOM
+  // contains only process output, making wrapped/concatenated progress exact.
+  expect(terminalTabIndex, 'the built-in sweep must capture the created terminal tab').toBeGreaterThanOrEqual(0)
+  const terminalTab = stripTabs.nth(terminalTabIndex)
+  await terminalTab.click()
+  const terminal = sidebar.locator('.xterm:visible')
+  await expect(terminal).toHaveCount(1)
+  const terminalInput = terminal.locator('textarea')
+  await terminalInput.click()
+  await terminalInput.pressSequentially([
+    "stty -echo; printf '\\033[2J\\033[HAGENT387_STARTED\\r\\n'; sleep 1",
+    "printf '%s\\r' 'remote: Counting objects: 10%'; sleep 0.3",
+    "printf '%s\\r' 'remote: Counting objects: 40%'; sleep 0.3",
+    "printf '%s\\r' 'remote: Counting objects: 70%'; sleep 0.3",
+    "printf '%s\\r\\nAGENT387_DONE\\r\\n' 'remote: Counting objects: 100%'; stty echo",
+  ].join('; '))
+  await terminalInput.press('Enter')
+  const terminalRows = sidebar.locator('.xterm .xterm-rows > div')
+  await expect(
+    terminalRows.filter({ hasText: 'AGENT387_STARTED' }),
+    'the progress command must start before hiding the terminal',
+  ).toHaveCount(1, { timeout: 30_000 })
+  const filesTabForProgress = sidebar.locator('[title="Files"][draggable="true"]').first()
+  await filesTabForProgress.click()
+  await expect(terminal, 'the mounted terminal must be hidden behind the Files tab').toHaveCount(0)
+  // After START the scripted sleeps total 1.9s; keep xterm hidden for 3s so
+  // completion occurs offscreen without relying on its suspended DOM renderer.
+  await page.waitForTimeout(3_000)
+  await expect(terminal, 'the terminal must remain hidden for the full progress command').toHaveCount(0)
+  await terminalTab.click()
+  await expect(terminal).toHaveCount(1)
+  await expect(
+    terminalRows.filter({ hasText: 'AGENT387_DONE' }),
+    'the completion marker must render after restoring the terminal',
+  ).toHaveCount(1, { timeout: 30_000 })
+  await expect.poll(
+    async () => (await terminalRows.allTextContents())
+      .map(text => text.trim())
+      .filter(text => text.includes('remote:')),
+    {
+      message: 'carriage-return progress must remain one clean final row without concatenation or soft-wrap fragments',
+      timeout: 30_000,
+    },
+  ).toEqual(['remote: Counting objects: 100%'])
+  await assertNoCrash()
 
   // Side Chat host-route smoke against the REAL host: create a thread child
   // under the seeded session (custom-seed creation through AgentRegistry),
