@@ -39,6 +39,11 @@ export interface TimelineStatePoint {
   state: AgentState
 }
 
+export interface TimelineTailObservation {
+  time: number
+  state: AgentState
+}
+
 export interface AgentTimelineRow {
   sessionId: string
   parentSessionId: string
@@ -51,6 +56,7 @@ export interface AgentTimelineRow {
   declaredAt: number
   declarationSeq: number
   statePoints: TimelineStatePoint[]
+  tailObservation?: TimelineTailObservation
 }
 
 export interface AgentTimelineResult {
@@ -112,6 +118,13 @@ interface DelegationPolicyLike {
 /** One spawn declaration, read straight from the root journal's
  * `subagent-next/agent-declared` event (the fold's SpawnNode is a verbatim
  * copy of this payload); the receipt messageId arrives with `agent-ready`. */
+interface AgentRuntimeLike {
+  readonly status: 'idle' | 'running'
+  readonly session: {
+    readonly events?: readonly SidebarSessionEvent[]
+  }
+}
+
 interface SpawnDeclaration {
   childSessionId: string
   backend: string
@@ -193,7 +206,7 @@ export function buildAgentTimelineApi(ctx: Context): SidebarAgentTimelineRoutes 
       const sessionId = requireString(payload, 'sessionId')
       const snapshot = await readRoot(sessionId)
       const projection = await serviceProjection(sessionId)
-      return timelineResult(sessionId, snapshot, projection)
+      return timelineResult(ctx, sessionId, snapshot, projection)
     },
     async detail(payload) {
       const sessionId = requireString(payload, 'sessionId')
@@ -248,62 +261,125 @@ function isPersistenceRootJournalError(error: unknown): boolean {
   return name === 'SessionPersistenceCorruptionError' || name === 'SessionFormatUnsupportedError'
 }
 
-function timelineResult(
+async function timelineResult(
+  ctx: Context,
   rootSessionId: string,
   snapshot: SessionSnapshot,
   projection: SubagentNextProjectionLike,
-): AgentTimelineResult {
+): Promise<AgentTimelineResult> {
   return {
     root: {
       sessionId: rootSessionId,
       path: '/root',
-      startedAt: firstEventAt(snapshot.events),
+      startedAt: firstTurnAt(snapshot.events),
       lastEventAt: lastEventAt(snapshot.events),
     },
     asOfSeq: projection.asOfSeq,
-    agents: treeSortedRows(rootSessionId, snapshot.events, projection),
+    agents: await treeSortedRows(ctx, rootSessionId, snapshot.events, projection),
   }
 }
 
-function firstEventAt(events: readonly SidebarSessionEvent[]): number | null {
-  return events[0]?.time ?? null
+function firstTurnAt(events: readonly SidebarSessionEvent[]): number | null {
+  for (const event of events) {
+    if (event.type === 'turn/start') return event.time
+  }
+  return null
 }
 
 function lastEventAt(events: readonly SidebarSessionEvent[]): number | null {
   let last: number | null = null
   for (const event of events) {
+    if (typeof event.time !== 'number' || !Number.isFinite(event.time)) continue
     if (last === null || event.time > last) last = event.time
   }
   return last
 }
 
-function treeSortedRows(
+async function treeSortedRows(
+  ctx: Context,
   rootSessionId: string,
   events: readonly SidebarSessionEvent[],
   projection: SubagentNextProjectionLike,
-): AgentTimelineRow[] {
+): Promise<AgentTimelineRow[]> {
   const declarations = declarationsOf(events)
   const statePoints = statePointsOf(events)
-  const rows = projection.agents
+  const rows = await Promise.all(projection.agents
     .filter(agent => agent.sessionId !== rootSessionId)
-    .map((agent): AgentTimelineRow => {
+    .map(async (agent): Promise<AgentTimelineRow> => {
       const declaration = declarations.get(agent.sessionId)
       const points = statePoints.get(agent.sessionId) ?? []
+      const tailObservation = await staleTailObservation(ctx, agent.sessionId, points, events)
+      const latestState = points.at(-1)?.state ?? cloneState(agent.state)
       return {
         sessionId: agent.sessionId,
         parentSessionId: agent.parentSessionId,
         path: agent.path,
         mode: agent.mode ?? 'continuable',
         ...(agent.label !== undefined ? { label: agent.label } : {}),
-        state: points.at(-1)?.state ?? cloneState(agent.state),
+        state: tailObservation === undefined || latestState.residency === 'closed'
+          ? latestState
+          : cloneState(tailObservation.state),
         modelSelection: cloneModelSelection(agent.modelSelection),
         hasChildren: agent.hasChildren,
         declaredAt: declaration?.time ?? 0,
         declarationSeq: declaration?.seq ?? -1,
         statePoints: points,
+        ...(tailObservation === undefined ? {} : { tailObservation }),
       }
-    })
+    }))
   return sortRowsAsTree(rootSessionId, rows)
+}
+
+async function staleTailObservation(
+  ctx: Context,
+  sessionId: string,
+  points: readonly TimelineStatePoint[],
+  rootEvents: readonly SidebarSessionEvent[],
+): Promise<TimelineTailObservation | undefined> {
+  const running = points.findLast(point => point.state.residency === 'live'
+    && (point.state.turn.kind === 'provisioning' || point.state.turn.kind === 'running'))
+  if (running === undefined) return undefined
+  const next = points.find(point => point.seq > running.seq)
+  if (next !== undefined && next.transition !== 'closed') return undefined
+
+  const closedCold = closedFromCold(rootEvents, sessionId)
+  const agents = ctx.get('agents') as { get(id: string): AgentRuntimeLike | undefined } | undefined
+  const live = agents?.get(sessionId)
+  if (!closedCold && (live === undefined || live.status === 'running')) return undefined
+
+  let childEvents = live?.session.events
+  if (childEvents === undefined) {
+    const persistence = ctx.get('sessionPersistence') as SessionPersistenceLike | undefined
+    if (persistence === undefined || typeof persistence.inspect !== 'function') return undefined
+    try {
+      childEvents = (await persistence.inspect(sessionId)).events
+    } catch {
+      return undefined
+    }
+  }
+  const time = lastEventAt(childEvents)
+  const limit = next?.time
+  if (time === null || time <= running.time || (limit !== undefined && time >= limit)) return undefined
+  return {
+    time,
+    state: live === undefined
+      ? { residency: 'cold', lastTurn: 'idle' }
+      : { residency: 'live', turn: { kind: 'idle' } },
+  }
+}
+
+function closedFromCold(events: readonly SidebarSessionEvent[], sessionId: string): boolean {
+  for (const event of events) {
+    if (event.type !== 'subagent-next/close-started') continue
+    const subtree = (event.data as { subtree?: unknown }).subtree
+    if (!Array.isArray(subtree)) continue
+    for (const member of subtree) {
+      if (member === null || typeof member !== 'object') continue
+      const record = member as { sessionId?: unknown; previousStatus?: unknown }
+      if (record.sessionId === sessionId && record.previousStatus === 'cold') return true
+    }
+  }
+  return false
 }
 
 function declarationsOf(events: readonly SidebarSessionEvent[]): Map<string, { seq: number; time: number }> {

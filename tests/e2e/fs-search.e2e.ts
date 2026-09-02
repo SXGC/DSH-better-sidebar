@@ -16,12 +16,14 @@ const WORKSPACE_PATH = join(
   process.env.DSH_E2E_WORKSPACE ?? join(tmpdir(), 'dsh-e2e-workspace'),
   'fs-search',
 )
-const SEARCH_QUERY = 'SeArCh-E2E'
-const EXPECTED_MATCHES = [
+const NAME_SEARCH_QUERY = 'SeArCh-E2E'
+const NAME_SEARCH_MATCHES = [
   '.search-e2e-hidden.txt',
   'search-e2e-dir',
   'src/search-e2e-file.TXT',
 ]
+const PATH_SUFFIX_QUERY = 'src/SeArCh-E2E-file.TXT'
+const PATH_SUFFIX_MATCHES = ['src/search-e2e-file.TXT']
 
 let api: APIRequestContext
 
@@ -110,25 +112,30 @@ test('fs-search e2e: searches the mounted workspace from the Files window', asyn
   await expect(expandButton).toHaveCount(1, { timeout: 90_000 })
   await expandButton.click()
 
-  const searchInput = sidebar.getByPlaceholder(/Search files by name|按文件名搜索/).first()
+  const searchInput = sidebar.getByPlaceholder(/Search by file name or path suffix|按文件名或路径后缀搜索/).first()
   await expect(searchInput).toBeVisible({ timeout: 30_000 })
-  const searchResponse = page.waitForResponse(response => (
-    response.request().method() === 'POST'
-      && response.url().endsWith('/sidebar/api/fs.search')
-  ))
-  await searchInput.fill(SEARCH_QUERY)
+  const search = async (query: string, expected: string[]) => {
+    const searchResponse = page.waitForResponse(response => (
+      response.request().method() === 'POST'
+        && response.url().endsWith('/sidebar/api/fs.search')
+    ))
+    await searchInput.fill(query)
 
-  const response = await searchResponse
-  expect(response.ok(), `fs.search: ${response.status()} ${await response.text()}`).toBe(true)
-  const body = (await response.json()) as { ok: boolean; value?: { matches: string[]; truncated: boolean } }
-  expect(body).toEqual({ ok: true, value: { matches: EXPECTED_MATCHES, truncated: false } })
+    const response = await searchResponse
+    expect(response.ok(), `fs.search: ${response.status()} ${await response.text()}`).toBe(true)
+    const body = (await response.json()) as { ok: boolean; value?: { matches: string[]; truncated: boolean } }
+    expect(body).toEqual({ ok: true, value: { matches: expected, truncated: false } })
 
-  const resultRows = sidebar.locator('button[title]:visible').filter({ hasText: /search-e2e/i })
-  await expect(resultRows).toHaveCount(EXPECTED_MATCHES.length)
-  await expect
-    .poll(() => resultRows.evaluateAll(rows => rows.map(row => row.getAttribute('title'))))
-    .toEqual(EXPECTED_MATCHES)
+    const resultRows = sidebar.locator('button[title]:visible').filter({ hasText: /search-e2e/i })
+    await expect(resultRows).toHaveCount(expected.length)
+    await expect
+      .poll(() => resultRows.evaluateAll(rows => rows.map(row => row.getAttribute('title'))))
+      .toEqual(expected)
+  }
+
+  await search(NAME_SEARCH_QUERY, NAME_SEARCH_MATCHES)
   await expect(sidebar.getByText('search-e2e-secret.txt', { exact: false })).toHaveCount(0)
+  await search(PATH_SUFFIX_QUERY, PATH_SUFFIX_MATCHES)
 
   await sidebar.locator('button[title="src/search-e2e-file.TXT"]:visible').click()
   await expect(sidebar.locator('input[placeholder^="File path"]:visible')).toHaveValue(/search-e2e-file\.TXT$/)

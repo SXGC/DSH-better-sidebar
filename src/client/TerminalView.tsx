@@ -37,7 +37,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
 import '@xterm/xterm/css/xterm.css'
 import { t } from './locales.ts'
-import { openWhenSized } from './open-when-sized.ts'
+import { createTerminalFitController, type TerminalFitController } from './terminal-fit-controller.ts'
 import { api, type SessionScope, type TerminalDepsStatus } from './api.ts'
 import { agentUuidOf, isAgentTabId, type SidebarStore } from './state.ts'
 import { isDarkScheme, subscribeColorScheme, effectiveTokenValue, tokenValue } from './theme.ts'
@@ -103,14 +103,17 @@ function xtermTheme(): ITheme {
   }
 }
 
-export function TerminalView(props: { scope: SessionScope; tabId: string; store: SidebarStore }) {
-  const { scope, tabId, store } = props
+export function TerminalView(props: { scope: SessionScope; tabId: string; store: SidebarStore; visible: boolean }) {
+  const { scope, tabId, store, visible } = props
   const hostRef = useRef<HTMLDivElement>(null)
+  const controllerRef = useRef<TerminalFitController | null>(null)
   const [connected, setConnected] = useState(false)
   const [fatal, setFatal] = useState<string | null>(null)
   const [depsFatal, setDepsFatal] = useState<TerminalDepsInfo | null>(null)
   const [lastUrl, setLastUrl] = useState<string | null>(null)
   const connectRef = useRef<(() => void) | null>(null)
+  const visibleRef = useRef(visible)
+  visibleRef.current = visible
 
   useEffect(() => {
     const host = hostRef.current
@@ -140,6 +143,7 @@ export function TerminalView(props: { scope: SessionScope; tabId: string; store:
     let closed = false
     let retry: number | undefined
     let failures = 0
+    let lastDimensions: { cols: number; rows: number } | null = null
 
     const wsUrl = (): string => {
       const url = new URL('/sidebar/ws/terminal', location.origin)
@@ -160,9 +164,10 @@ export function TerminalView(props: { scope: SessionScope; tabId: string; store:
       return url.toString()
     }
 
-    const sendResize = (): void => {
+    const sendResize = (dimensions: { cols: number; rows: number }): void => {
+      lastDimensions = dimensions
       if (socket !== null && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+        socket.send(JSON.stringify({ type: 'resize', ...dimensions }))
       }
     }
 
@@ -175,7 +180,7 @@ export function TerminalView(props: { scope: SessionScope; tabId: string; store:
         failures = 0
         setConnected(true)
         setFatal(null)
-        sendResize()
+        if (lastDimensions !== null) sendResize(lastDimensions)
       }
       socket.onmessage = (event) => {
         if (typeof event.data === 'string') term.write(event.data)
@@ -228,10 +233,20 @@ export function TerminalView(props: { scope: SessionScope; tabId: string; store:
     const inputSub = term.onData((data) => {
       if (socket !== null && socket.readyState === WebSocket.OPEN) socket.send(data)
     })
+    const controller = createTerminalFitController({
+      measure: () => ({ width: host.clientWidth, height: host.clientHeight }),
+      isConnected: () => host.isConnected,
+      open: () => { term.open(host) },
+      fit: () => { fit.fit() },
+      dimensions: () => ({ cols: term.cols, rows: term.rows }),
+      sendResize,
+      requestFrame: callback => requestAnimationFrame(callback),
+      cancelFrame: frameId => cancelAnimationFrame(frameId),
+    }, visibleRef.current)
+    controllerRef.current = controller
     const observer = new ResizeObserver(() => {
       try {
-        fit.fit()
-        sendResize()
+        controller.requestFit()
       } catch {
         // The terminal may be mid-dispose; ignore.
       }
@@ -249,38 +264,18 @@ export function TerminalView(props: { scope: SessionScope; tabId: string; store:
         term.options.fontFamily = next.fontFamily
         term.options.fontSize = next.fontSize
         try {
-          fit.fit()
-          sendResize()
+          controller.requestFit()
         } catch {
           // The terminal may be mid-dispose; ignore.
         }
       }
     })
 
-    // The terminal must not be opened in a zero-size container: xterm's
-    // renderer creation fails there and the next Viewport refresh crashes
-    // reading `.dimensions` off the undefined renderer (blank terminal on
-    // WKWebView when the bottom panel's expand slide leaves the host at
-    // height 0; any display:none-hidden ancestor does the same). Defer
-    // open+fit until the host has a real size — writes arriving meanwhile
-    // are buffered by xterm's WriteBuffer and render once open, and
-    // FitAddon.fit() is a safe no-op before open. sendResize() here covers
-    // the deferred path where the socket may already be open with the
-    // default 80x24 dims.
-    const cancelOpen = openWhenSized(host, () => {
-      try {
-        term.open(host)
-        fit.fit()
-        sendResize()
-      } catch (error) {
-        console.error('[dsh-better-sidebar] xterm open failed:', error)
-      }
-    })
-
     connect()
     return () => {
       closed = true
-      cancelOpen()
+      controller.dispose()
+      if (controllerRef.current === controller) controllerRef.current = null
       window.clearTimeout(retry)
       observer.disconnect()
       fontSub()
@@ -317,6 +312,10 @@ export function TerminalView(props: { scope: SessionScope; tabId: string; store:
       connectRef.current = null
     }
   }, [scope.sessionId, scope.cwd, tabId, store])
+
+  useEffect(() => {
+    controllerRef.current?.setVisible(visible)
+  }, [visible])
 
   return (
     <div className={css.terminalWrap}>

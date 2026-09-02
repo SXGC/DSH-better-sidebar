@@ -37,7 +37,9 @@
 | 隔离测试 | 崩溃条带/重试恢复/布局变量清理 | `tests/sidebar-crash.spec.tsx` | 已提交 |
 | **#42 触发链回归** | 底部面板首展自动开终端：恰好一个 terminal tab 落在底部工作树、`bottomOpenedOnce` 原子置位、pref / 类型禁用双门控、面板完整存活 | `tests/bottom-auto-terminal.spec.tsx`（本次新增，4 例） | 本次提交 |
 
-三者合起来构成 #42 全链回归保护：触发链（本测试）→ 零尺寸延迟（openWhenSized 单测）→ 崩溃隔离（containment 测试）。
+上述表格记录 v0.11.0 发布时的实现。AGENT-387 后，`terminal-fit-controller` 取代 `openWhenSized`，并继续覆盖初始零尺寸保护，同时增加隐藏与稳定恢复控制；当前测试见 `tests/terminal-fit-controller.spec.ts`。
+
+三者合起来构成 #42 全链回归保护：触发链（本测试）→ 控制器的初始稳定尺寸测试 → 崩溃隔离（containment 测试）。
 
 ## 3. 附带问题：AttachConsole 报错（仅文档化）
 

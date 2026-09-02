@@ -108,10 +108,13 @@ export function agentStateKind(state: AgentState): string {
 /**
  * Display-level pass over a row's raw segments: merge adjacent same-kind
  * segments, absorb slivers shorter than `minFraction` of the range into their
- * left neighbour, and cap a trailing open `cold` span to a short stub so an
- * unloaded agent reads as "ended here", not as a texture running to the right
- * edge. Errored slivers are never absorbed — a brief failure is still signal.
- * The raw segments stay untouched: durations and tooltips keep exact values.
+ * left neighbour, and cap a trailing `cold` span to a short stub so an
+ * unloaded agent reads as "ended here", not as a block running to its later
+ * close. Trailing means no live segment follows: an open cold tail AND a
+ * cold span closed afterwards both stub, and the close tick right after a
+ * stub adds no pixel, so it is dropped. Errored slivers are never absorbed —
+ * a brief failure is still signal. The raw segments stay untouched:
+ * durations and tooltips keep exact values.
  */
 export function displaySegments(
   segments: readonly TimelineSegment[],
@@ -121,23 +124,34 @@ export function displaySegments(
 ): TimelineSegment[] {
   if (range === null || segments.length === 0) return [...segments]
   const minMs = Math.max(1, (range.end - range.start) * minFraction)
-  type Working = TimelineSegment & { kind: string }
+  const lastLive = segments.reduce(
+    (acc, segment, index) => (segment.state.residency === 'live' ? index : acc),
+    -1,
+  )
+  type Working = TimelineSegment & { kind: string; stub?: boolean }
   const merged: Working[] = []
-  for (const segment of segments) {
+  for (const [index, segment] of segments.entries()) {
     const kind = agentStateKind(segment.state)
-    const end = segment.end === undefined && segment.state.residency === 'cold'
-      ? Math.min(now, segment.start + minMs)
-      : segment.end
+    const stub = segment.state.residency === 'cold' && index > lastLive
+    const end = stub ? Math.min(segment.end ?? now, segment.start + minMs) : segment.end
     const prev = merged[merged.length - 1]
-    const sliver = (end ?? now) - segment.start < minMs && kind !== 'errored'
+    if (kind === 'closed' && prev?.stub === true) continue
+    if (stub && segment.state.residency === 'cold' && segment.state.lastTurn === 'errored' && prev?.kind === 'errored') continue
+    const sliver = !stub && (end ?? now) - segment.start < minMs && kind !== 'errored'
     if (prev !== undefined && (prev.kind === kind || sliver)) {
       if (end === undefined) delete prev.end
       else if (prev.end !== undefined) prev.end = Math.max(prev.end, end)
       continue
     }
-    merged.push({ start: segment.start, ...(end === undefined ? {} : { end }), state: segment.state, kind })
+    merged.push({
+      start: segment.start,
+      ...(end === undefined ? {} : { end }),
+      state: segment.state,
+      kind,
+      ...(stub ? { stub } : {}),
+    })
   }
-  return merged.map(({ kind: _kind, ...segment }) => segment)
+  return merged.map(({ kind: _kind, stub: _stub, ...segment }) => segment)
 }
 
 /** The state-dot semantics of an agent state, mirroring the job dot colors. */
@@ -272,13 +286,19 @@ function rootDisplayRow(
   running: boolean,
   now: number,
 ): TimelineDisplayRow {
-  const start = timeline.root.startedAt ?? timeline.root.lastEventAt ?? now
+  const start = timeline.root.startedAt
   const state: AgentState = running
     ? { residency: 'live', turn: { kind: 'running' } }
     : { residency: 'live', turn: { kind: 'completed', stopReason: 'completed' } }
-  const segment: TimelineSegment = running
-    ? { start, state }
-    : { start, end: timeline.root.lastEventAt ?? start, state }
+  const segments: TimelineSegment[] = start === null
+    ? []
+    : [running
+        ? { start, state }
+        : {
+            start,
+            end: timeline.root.lastEventAt ?? start,
+            state: { residency: 'live', turn: { kind: 'running' } },
+          }]
   return {
     id: timeline.root.sessionId,
     kind: 'root',
@@ -286,11 +306,11 @@ function rootDisplayRow(
     depth: 0,
     path: timeline.root.path,
     state,
-    startedAt: timeline.root.startedAt ?? undefined,
-    endedAt: running ? undefined : timeline.root.lastEventAt ?? undefined,
-    segments: timeline.root.startedAt === null && timeline.root.lastEventAt === null ? [] : [segment],
-    activeDurationMs: durationOf([segment], now, 'active'),
-    wallDurationMs: durationOf([segment], now, 'wall'),
+    startedAt: start ?? undefined,
+    endedAt: running || start === null ? undefined : timeline.root.lastEventAt ?? undefined,
+    segments,
+    activeDurationMs: durationOf(segments, now, 'active'),
+    wallDurationMs: durationOf(segments, now, 'wall'),
     contextOnly: false,
     longRunning: false,
   }
@@ -327,6 +347,17 @@ function agentDisplayRow(row: AgentTimelineRow, depth: number, now: number, long
 
 export function buildSegments(row: AgentTimelineRow): TimelineSegment[] {
   const points = [...row.statePoints].sort((left, right) => left.seq - right.seq)
+  const observation = row.tailObservation
+  if (observation !== undefined) {
+    const nextIndex = points.findIndex(point => point.time > observation.time)
+    const insertAt = nextIndex < 0 ? points.length : nextIndex
+    points.splice(insertAt, 0, {
+      seq: observation.time,
+      time: observation.time,
+      transition: 'became-cold',
+      state: cloneState(observation.state),
+    })
+  }
   if (points.length === 0) {
     return [{ start: row.declaredAt, state: cloneState(row.state) }]
   }
@@ -466,10 +497,15 @@ function segmentEndAt(segment: TimelineSegment, now: number): number {
 function durationOf(segments: readonly TimelineSegment[], now: number, mode: 'active' | 'wall'): number {
   let total = 0
   for (const segment of segments) {
-    if (mode === 'active' && segment.state.residency !== 'live') continue
+    if (mode === 'active' && !isActiveState(segment.state)) continue
     total += Math.max(0, segmentEndAt(segment, now) - segment.start)
   }
   return total
+}
+
+function isActiveState(state: AgentState): boolean {
+  return state.residency === 'live'
+    && (state.turn.kind === 'provisioning' || state.turn.kind === 'running' || state.turn.kind === 'waiting')
 }
 
 function isLongRunning(

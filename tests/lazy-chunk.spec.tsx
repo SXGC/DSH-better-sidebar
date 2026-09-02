@@ -148,11 +148,11 @@ describe('built-in descriptor contract (render-prop functions)', () => {
     unmount()
   })
 
-  it('the terminal descriptor maps tab.id → tabId (TerminalView props are not TabComponentProps)', async () => {
-    let received: unknown
+  it('the terminal descriptor maps tab identity and visibility into TerminalView', async () => {
+    let received: { tabId: string; visible: boolean } | undefined
     registerChunkForTests('terminal', async () => ({
-      TerminalView: ((props: { tabId: string }) => {
-        received = props.tabId
+      TerminalView: ((props: { tabId: string; visible: boolean }) => {
+        received = props
         return createElement('div', { 'data-testid': 'terminal-tabid' }, props.tabId)
       }) as unknown as ComponentType<Record<string, never>>,
     }))
@@ -168,7 +168,7 @@ describe('built-in descriptor contract (render-prop functions)', () => {
     const { container, unmount } = mount(createElement(terminal.component, props))
     await act(async () => {})
     expect(container.querySelector('[data-testid="terminal-tabid"]')?.textContent).toBe('terminal:2')
-    expect(received).toBe('terminal:2')
+    expect(received).toMatchObject({ tabId: 'terminal:2', visible: true })
     unmount()
   })
 

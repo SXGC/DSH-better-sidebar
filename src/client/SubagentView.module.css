@@ -524,8 +524,8 @@
    Every state keeps a DISTINCT SHAPE (filled/dashed/hollow dot, check,
    cross, pause, slash, dashed square), so a greyscale screenshot or a
    colour-blind reader still tells them apart. The word rides the right-hand
-   status text: active/attention/error states always spell it; settled ones
-   keep only the duration and demote the word to tooltip + sr-only. */
+   status text. Every healthy row spells out the current state; colour only
+   reinforces the state tier. */
 
 .runDashboardMark {
   flex: none;
@@ -615,6 +615,10 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
+.runDashboardColdError {
+  color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 68%, var(--dsw-alias-label-tertiary));
+}
+
 /* ── Gantt bars ────────────────────────────────────────────────────────
    One continuous track per row, not a row of pills: segments are flush
    fills clipped by the track, separated by a hairline, so two rows' spans
@@ -660,10 +664,8 @@
   top: 0;
   bottom: 0;
   display: block;
-  min-width: 2px;
   overflow: hidden;
   box-sizing: border-box;
-  padding: 0 5px;
   box-shadow: inset -1px 0 0 var(--dsw-alias-bg-base);
   background-color: var(--dsw-alias-interactive-bg-active);
   color: var(--dsw-alias-label-primary);
@@ -728,14 +730,13 @@
   background-color: color-mix(in srgb, var(--dsw-alias-label-secondary) 16%, transparent);
 }
 
+/* End ticks are a solid dark mark, never a 1px stripe weave: a 3px stub
+   with 1px-on/4px-off stripes only ever shows one line, and that line
+   vanishes on the 1Hz now-tick as the shared range grows. */
 .runDashboardSegment[data-segment-state="cold"],
 .runDashboardSegment[data-segment-state="closed"] {
-  background-color: color-mix(in srgb, var(--dsw-alias-label-tertiary) 8%, transparent);
-  background-image: repeating-linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--dsw-alias-label-tertiary) 34%, transparent) 0 1px,
-    transparent 1px 5px
-  );
+  background-color: color-mix(in srgb, var(--dsw-alias-label-tertiary) 48%, transparent);
+  box-shadow: none;
   color: var(--dsw-alias-label-secondary);
 }
 

@@ -3,7 +3,7 @@
  * issue #42 (bottom panel first expand + auto terminal → whole panel blank).
  *
  * #42's crash itself was the zero-size xterm open (the same root cause as
- * #25, fixed by openWhenSized — see tests/open-when-sized.spec.ts), and the
+ * #25, now covered by terminal-fit-controller's initial settling rules), and the
  * "whole panel blank" amplification is covered by the per-tab containment
  * tests (tests/sidebar-crash.spec.tsx). What no test pinned was the trigger:
  * the Sidebar effect that opens a terminal tab the FIRST time the bottom

@@ -108,6 +108,7 @@ function projectionOf(rootSessionId: string, events: readonly SidebarSessionEven
 function ctxWith(options: {
   live?: Record<string, { header: Record<string, unknown>; events: SidebarSessionEvent[] }>
   persisted?: Record<string, { meta: Record<string, unknown>; events: SidebarSessionEvent[] }>
+  agents?: Record<string, { status: 'idle' | 'running' }>
   inspectError?: Error
   /** Override the subagentNext service; 'absent' models a deployment without it. */
   subagentNext?: { snapshot(rootSessionId: string): Promise<unknown> | unknown } | 'absent'
@@ -131,13 +132,38 @@ function ctxWith(options: {
         }
       : key === 'subagentNext' && subagentNext !== 'absent'
         ? subagentNext
-        : undefined,
+        : key === 'agents'
+          ? {
+              get: (id: string) => {
+                const record = options.agents?.[id]
+                const session = options.live?.[id]
+                return record === undefined || session === undefined ? undefined : { ...record, session }
+              },
+            }
+          : undefined,
   } as unknown as Context
 }
 
 describe('agents.timeline route', () => {
+  it('starts the root timeline at the first turn instead of earlier session setup events', async () => {
+    const rootEvents = [
+      event('permission/preset', 0, {}, 100),
+      event('turn/start', 1, {}, 200),
+      event('turn/end', 2, {}, 300),
+      event('turn/start', 3, {}, 400),
+    ]
+    const api = buildAgentTimelineApi(ctxWith({
+      persisted: { root: { meta: { id: 'root', createdAt: 50 }, events: rootEvents } },
+    }))
+
+    const value = await api.timeline({ sessionId: 'root' })
+
+    expect(value.root).toEqual({ sessionId: 'root', path: '/root', startedAt: 200, lastEventAt: 400 })
+  })
+
   it('projects restored native descendants with spawn order, all state points, cold/completed states, and no sensitive fields', async () => {
     const rootEvents = [
+      event('turn/start', 0, {}, 1_000),
       declared(1, 'b', 'root', '/root/b'),
       declared(2, 'a', 'root', '/root/a'),
       declared(3, 'a1', 'a', '/root/a/a1'),
@@ -157,7 +183,7 @@ describe('agents.timeline route', () => {
 
     const value = await api.timeline({ sessionId: 'root' })
 
-    expect(value.root).toEqual({ sessionId: 'root', path: '/root', startedAt: 1001, lastEventAt: 1012 })
+    expect(value.root).toEqual({ sessionId: 'root', path: '/root', startedAt: 1_000, lastEventAt: 1012 })
     expect(value.asOfSeq).toBe(12)
     expect(value.agents.map(row => row.sessionId)).toEqual(['b', 'a', 'a1'])
     const b = value.agents[0]!
@@ -170,6 +196,95 @@ describe('agents.timeline route', () => {
     expect(JSON.stringify(value)).not.toContain('requestHash')
     expect(JSON.stringify(value)).not.toContain('operationId')
     expect(JSON.stringify(value)).not.toContain('secret/model-key')
+  })
+
+  it('observes a missing cold transition from child persistence before a later close', async () => {
+    const rootEvents = [
+      declared(1, 'child'),
+      ready(2, 'child'),
+      state(3, 'child', 'ready', { residency: 'live', turn: { kind: 'running' } }),
+      event('subagent-next/close-started', 9, {
+        subtree: [{ sessionId: 'child', previousStatus: 'cold' }],
+      }, 10_000),
+      state(10, 'child', 'closed', { residency: 'closed' }),
+    ]
+    rootEvents[rootEvents.length - 1] = { ...rootEvents.at(-1)!, time: 10_000 }
+    const api = buildAgentTimelineApi(ctxWith({
+      persisted: {
+        root: { meta: { id: 'root' }, events: rootEvents },
+        child: {
+          meta: { id: 'child', parentSession: 'root' },
+          events: [
+            { type: 'reasoning-chunks', seq: 0, data: {} } as unknown as SidebarSessionEvent,
+            event('assistant/chunk', 1, {}, 5_000),
+          ],
+        },
+      },
+    }))
+
+    const value = await api.timeline({ sessionId: 'root' })
+
+    expect(value.agents[0]).toMatchObject({
+      state: { residency: 'closed' },
+      tailObservation: {
+        time: 5_000,
+        state: { residency: 'cold', lastTurn: 'idle' },
+      },
+    })
+  })
+
+  it('reports a live idle agent instead of a stale running projection', async () => {
+    const rootEvents = [
+      declared(1, 'child'),
+      state(2, 'child', 'ready', { residency: 'live', turn: { kind: 'running' } }),
+    ]
+    const api = buildAgentTimelineApi(ctxWith({
+      live: {
+        root: { header: { id: 'root' }, events: rootEvents },
+        child: {
+          header: { id: 'child', parentSession: 'root' },
+          events: [event('assistant/chunk', 1, {}, 5_000)],
+        },
+      },
+      agents: {
+        child: { status: 'idle' },
+      },
+    }))
+
+    const value = await api.timeline({ sessionId: 'root' })
+
+    expect(value.agents[0]).toMatchObject({
+      state: { residency: 'live', turn: { kind: 'idle' } },
+      tailObservation: {
+        time: 5_000,
+        state: { residency: 'live', turn: { kind: 'idle' } },
+      },
+    })
+  })
+
+  it('does not invent a cold observation when the close found the child running', async () => {
+    const rootEvents = [
+      declared(1, 'child'),
+      state(2, 'child', 'ready', { residency: 'live', turn: { kind: 'running' } }),
+      event('subagent-next/close-started', 9, {
+        subtree: [{ sessionId: 'child', previousStatus: 'running' }],
+      }, 10_000),
+      state(10, 'child', 'closed', { residency: 'closed' }),
+    ]
+    rootEvents[rootEvents.length - 1] = { ...rootEvents.at(-1)!, time: 10_000 }
+    const api = buildAgentTimelineApi(ctxWith({
+      persisted: {
+        root: { meta: { id: 'root' }, events: rootEvents },
+        child: {
+          meta: { id: 'child', parentSession: 'root' },
+          events: [event('assistant/chunk', 1, {}, 5_000)],
+        },
+      },
+    }))
+
+    const value = await api.timeline({ sessionId: 'root' })
+
+    expect(value.agents[0]?.tailObservation).toBeUndefined()
   })
 
   it('rejects non-root sessions and corrupted root journals with the specified errors', async () => {

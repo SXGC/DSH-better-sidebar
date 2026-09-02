@@ -34,7 +34,7 @@ import type { TabDescriptor } from '../service.ts'
  * wrapper keeps the descriptor contract `(props) => ReactNode` — Sidebar
  * calls it as a plain function.
  *
- * TerminalView's props are { scope, tabId, store } — `tabId` is NOT part of
+ * TerminalView's props are { scope, tabId, store, visible } — `tabId` is NOT part of
  * TabComponentProps (it carries `tab: SidebarTab` instead), so the
  * descriptor maps it explicitly; a bare pass-through would leave tabId
  * undefined and TerminalView's isAgentTabId(tabId) would crash on
@@ -50,6 +50,7 @@ interface TerminalViewProps {
   scope: SessionScope
   tabId: string
   store: SidebarStore
+  visible: boolean
 }
 
 /** How many UI-owned terminals may be open at once (agent-owned ones are uncapped). */
@@ -292,7 +293,9 @@ export function builtinTabs(ctx: Context, options: BuiltinTabOptions = {}): read
           patch: { nextTerminal: state.nextTerminal + 1 },
         }
       },
-      component: ({ tab, scope, store }) => <LazyTerminal scope={scope} store={store} tabId={tab.id} />,
+      component: ({ tab, scope, store, visible }) => (
+        <LazyTerminal scope={scope} store={store} tabId={tab.id} visible={visible} />
+      ),
     },
     {
       id: 'browser',
