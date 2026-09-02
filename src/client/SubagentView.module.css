@@ -524,8 +524,8 @@
    Every state keeps a DISTINCT SHAPE (filled/dashed/hollow dot, check,
    cross, pause, slash, dashed square), so a greyscale screenshot or a
    colour-blind reader still tells them apart. The word rides the right-hand
-   status text: active/attention/error states always spell it; settled ones
-   keep only the duration and demote the word to tooltip + sr-only. */
+   status text. Every healthy row spells out the current state; colour only
+   reinforces the state tier. */
 
 .runDashboardMark {
   flex: none;
@@ -613,6 +613,10 @@
 
 .runDashboardRowStatus[data-status-tier="error"] {
   color: var(--dsw-alias-state-error-primary);
+}
+
+.runDashboardColdError {
+  color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 68%, var(--dsw-alias-label-tertiary));
 }
 
 /* ── Gantt bars ────────────────────────────────────────────────────────

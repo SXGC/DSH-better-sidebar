@@ -27,10 +27,10 @@
 | 注意(修饰) | 长时间运行 | 运行行 + 红色胶囊 | 胶囊即标识 |
 | 异常(红) | 出错 | 红色 ✕ | 始终显示,红色;建议列表置顶 |
 | 异常(灰) | 诊断不可用 | 虚线方框 ▢ | 始终显示,灰色;轨道留空不臆造 |
-| 静默 | 已完成 | 绿灰 ✓ | 不显示,词进 tooltip,右侧只留时长 |
+| 静默 | 已完成 | 绿灰 ✓ | 灰色词保留,与时长并列 |
 | 静默 | 空闲 | 实心灰点 | 灰色词保留(live 但没干活,区别于已结束) |
-| 静默 | 已卸载 | 空心灰点 | 不显示(可唤醒继续) |
-| 静默 | 已关闭 | 斜杠圆圈 | 不显示(终态);关闭瞬间在 spark 上是深灰刻线 |
+| 静默 | 已卸载 | 空心灰点 | 灰色词保留(可唤醒继续) |
+| 静默 | 已关闭 | 斜杠圆圈 | 灰色词保留(终态);关闭瞬间在 spark 上是深灰刻线 |
 | 静默(修饰) | 仅上下文 | 整行降透明度 | 不可操作,仅历史参照 |
 
 Spark 纹理沿用现实现的编码:运行=实绿、创建=绿斜纹、等待=琥珀斜纹、中断=琥珀竖纹、出错=红交叉纹、结束态=实心深灰刻线(不再用 1px 竖纹,短桩在 1Hz now-tick 下会闪);进行中分段右端渐隐。
@@ -43,12 +43,12 @@ Spark 纹理沿用现实现的编码:运行=实绿、创建=绿斜纹、等待=�
 
 - **行骨架 = B「精简卡片」**:列表布局中卡片本体缩进(12px/级,连接肘画在卡外)、spark 成为卡片底边(5px,承接卡片圆角)、按钮点击行时出现在标题行内(窄行自动换行到第二行);root 行以字重区分,不再用填充色。
 - **「查看详情」面板 = sticky 底部 dock**:与后台任务输出 dock 同一交互模式,且两者**共享一个 dock**(打开一个关闭另一个,job 选中态提升到页面层);header 带代理名。
-- 状态词策略维持「活动/注意/异常显示、静默态进 tooltip + sr-only」;meta 的 model 与**全树主流模型**比较(与父级比较在 root 无模型时会全员显示,已否决)。
+- 状态词策略后续修订为**全部健康状态常驻显示**：活动/注意/异常状态按原层级着色，空闲/已完成/已卸载/已关闭用灰色，与活跃时长并列；meta 的 model 与**全树主流模型**比较(与父级比较在 root 无模型时会全员显示,已否决)。
 
 ## 实施记录(同日,本分支)
 
 - `agent-timeline.ts`:新增 `displaySegments()` 显示层合并 pass —— 相邻同类合并、小于量程阈值的碎片并入左邻(errored 与 trailing cold 短桩永不吸收)、后面不再有 live 段的 cold 尾统一截为短桩;错误刻线后不再叠加 cold 短桩。原始 segments 不动,时长/tooltip 用精确值。阈值:spark 1%、canvas 3px/画布宽(放大即恢复细节)。
-- `SubagentView.tsx`:`AgentStateBadge` → `AgentStateMark`(每状态独立形状)+ `statusTier`/`statusWordSilent` 分层词;行结构改 B 骨架;行点击切换按钮展开(`openActionsId`,单行互斥,按钮容器阻止冒泡);`baselineModel`(主流模型)去重;不可用的「中断/关闭」不渲染;job 选中态提升 + 详情 dock 移至最后;详情 header 带代理名。
+- `SubagentView.tsx`:`AgentStateBadge` → `AgentStateMark`(每状态独立形状)+ `statusTier` 分层着色;状态词策略后来改为全部健康状态常驻显示;行结构改 B 骨架;行点击切换按钮展开(`openActionsId`,单行互斥,按钮容器阻止冒泡);`baselineModel`(主流模型)去重;不可用的「中断/关闭」不渲染;job 选中态提升 + 详情 dock 移至最后;详情 header 带代理名。
 - `SubagentView.module.css`:标记/状态文本/底带/卡片缩进/连接肘/spark 底边/点击展开按钮(`data-actions-open` + focus-within;max-width+max-height 双收起,避免 0 宽 wrap 竖排撑高行)/sticky 详情 dock。
 - **顺手修复宿主 bug**:`.runDashboardLane` 改 flex 布局 —— 原 `laneBars` 的 `margin: 12px` 从 lane 顶部外边距塌陷逃逸,宽布局甘特每行累积 +12px 漂移(9 行漂移整整一行),Playwright 实测 drift 全 0。
 - 验证:vitest 698 通过(4 个断言更新到新规格)、`tsc` 干净、`pnpm build` 通过;Playwright 对 vite harness(`.coding/visual-companion/harness/`,双布局 + 全状态 + docks)截图核对。

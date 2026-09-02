@@ -21,6 +21,15 @@ function exactRule(selector: string): string {
   return match?.[1] ?? ''
 }
 
+describe('Run Dashboard status styling', () => {
+  it('renders the previous-turn error hint with a muted error token mix', () => {
+    const coldError = rule('runDashboardColdError')
+    expect(coldError).toContain('var(--dsw-alias-state-error-primary)')
+    expect(coldError).toContain('var(--dsw-alias-label-tertiary)')
+    expect(coldError).toContain('color-mix(')
+  })
+})
+
 describe('Run Dashboard segment weave', () => {
   it('does not inflate every absolutely positioned segment with horizontal chrome', () => {
     const segment = exactRule('runDashboardSegment')

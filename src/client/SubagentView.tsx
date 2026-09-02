@@ -634,6 +634,7 @@ function catalogSignature(
       id,
       summary?.running === true ? 'running' : 'idle',
       catalog?.state ?? 'missing',
+      catalog?.asOfSeq ?? 'unversioned',
       ...(catalog?.entries ?? []).map(entry => entry.kind === 'child'
         ? `${entry.id}:${entry.activity}:${entry.mode}:${entry.hasChildren ? 1 : 0}`
         : `${entry.id}:diagnostic:${entry.reason}`),
@@ -704,10 +705,8 @@ function agentMarkKind(row: TimelineDisplayRow): string {
 }
 
 /**
- * Attention tier of a state kind. Drives the colour of the right-hand status
- * text and whether the state word is spelled out on the row at all: settled
- * states ("silent") keep only the mark + duration, with the word demoted to
- * the tooltip and an sr-only span.
+ * Attention tier of a state kind. It drives only the colour of the right-hand
+ * status text; every healthy row still spells out its current state.
  */
 function statusTier(kind: string): 'active' | 'attention' | 'error' | 'muted' {
   switch (kind) {
@@ -722,11 +721,6 @@ function statusTier(kind: string): 'active' | 'attention' | 'error' | 'muted' {
     default:
       return 'muted'
   }
-}
-
-/** Settled states whose word lives in the tooltip, not on the row. */
-function statusWordSilent(kind: string): boolean {
-  return kind === 'completed' || kind === 'cold' || kind === 'closed'
 }
 
 /**
@@ -824,7 +818,6 @@ function RunDashboardTreeRow(props: {
   })
   const kind = agentMarkKind(row)
   const word = agentRowState(row)
-  const silent = statusWordSilent(kind)
   // The path lives in the title tooltip (the title IS the leaf); the meta
   // line always spells the effective model selection for an agent card.
   const meta = row.model === undefined ? '' : modelLabel(row.model)
@@ -864,11 +857,23 @@ function RunDashboardTreeRow(props: {
         <span
           className={css.runDashboardRowStatus}
           data-status-tier={statusTier(kind)}
-          title={silent ? `${word} · ${durationTitle}` : durationTitle}
+          title={durationTitle}
         >
           <span className={css.runDashboardSrOnly}>{t('runDashboardActiveDuration')} </span>
-          {row.kind === 'diagnostic' ? word : silent ? active : `${word} · ${active}`}
-          {silent && <span className={css.runDashboardSrOnly}> {word}</span>}
+          {row.kind === 'diagnostic' ? word : (
+            <>
+              {word}
+              {row.state?.residency === 'cold' && row.state.lastTurn === 'errored' && (
+                <>
+                  {' · '}
+                  <span className={css.runDashboardColdError} data-cold-error>
+                    {isZh() ? '上次已出错' : 'last Errored'}
+                  </span>
+                </>
+              )}
+              {' · '}{active}
+            </>
+          )}
         </span>
         {row.kind === 'agent' && (
           <span

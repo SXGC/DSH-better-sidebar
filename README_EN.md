@@ -273,6 +273,11 @@ For pre-release integration against the current DSH master, run `DSH_SOURCE_REPO
 - 📈 **"Background Tasks" becomes "Run Dashboard"**: the built-in tab id stays `subagent`, but the page now shows the current root session and every native subagent. Desktop uses a frozen left column plus a horizontal Gantt timeline; narrow screens degrade to a tree list while keeping status, path, model, details, chat navigation, and valid agent controls.
 - 🔎 **Agent inspection and filters**: filter by state, model, path, text, and long-running agents. The default long-running threshold is 60 minutes and can be changed or disabled in settings. Full initial tasks are read only after the user opens details; this sensitive text is not stored in localStorage, settings documents, or logs.
 - 🧰 **Agent controls and job linkage**: continuable subagents can be interrupted or closed with two-click confirmation. The page does not offer restart or rerun for agents or jobs. The background-jobs list keeps generic `JobView` rows such as `bash`, owner, status, duration, the shared output dock, and two-click kill; clicking an owner locates and highlights the matching agent row.
+- 🏷️ **Every subagent state stays visible**: running, provisioning, waiting, idle, completed, interrupted, errored, unloaded, and closed all keep a state word on the row. Unloaded states normally show only “Unloaded”; a failed previous turn adds a muted red “last Errored” hint, while normal results such as completed stay hidden. Catalog sequence changes automatically reload the timeline, so transitions between multiple `inactive` states do not require a manual refresh.
+
+**🐛 Fixes**
+
+- ⏱️ **Stopped subagents no longer keep accumulating run time**: when the host collaboration journal misses an idle/cold transition, the dashboard reconciles the current row with the live Agent status. For a later-closed historical row whose close record proves it was already cold, the child session's last event caps the missing interval. Active duration now counts only provisioning, running, and waiting spans, not completed or idle residency.
 
 ### v0.16.1
 

@@ -294,7 +294,11 @@ function rootDisplayRow(
     ? []
     : [running
         ? { start, state }
-        : { start, end: timeline.root.lastEventAt ?? start, state }]
+        : {
+            start,
+            end: timeline.root.lastEventAt ?? start,
+            state: { residency: 'live', turn: { kind: 'running' } },
+          }]
   return {
     id: timeline.root.sessionId,
     kind: 'root',
@@ -343,6 +347,17 @@ function agentDisplayRow(row: AgentTimelineRow, depth: number, now: number, long
 
 export function buildSegments(row: AgentTimelineRow): TimelineSegment[] {
   const points = [...row.statePoints].sort((left, right) => left.seq - right.seq)
+  const observation = row.tailObservation
+  if (observation !== undefined) {
+    const nextIndex = points.findIndex(point => point.time > observation.time)
+    const insertAt = nextIndex < 0 ? points.length : nextIndex
+    points.splice(insertAt, 0, {
+      seq: observation.time,
+      time: observation.time,
+      transition: 'became-cold',
+      state: cloneState(observation.state),
+    })
+  }
   if (points.length === 0) {
     return [{ start: row.declaredAt, state: cloneState(row.state) }]
   }
@@ -482,10 +497,15 @@ function segmentEndAt(segment: TimelineSegment, now: number): number {
 function durationOf(segments: readonly TimelineSegment[], now: number, mode: 'active' | 'wall'): number {
   let total = 0
   for (const segment of segments) {
-    if (mode === 'active' && segment.state.residency !== 'live') continue
+    if (mode === 'active' && !isActiveState(segment.state)) continue
     total += Math.max(0, segmentEndAt(segment, now) - segment.start)
   }
   return total
+}
+
+function isActiveState(state: AgentState): boolean {
+  return state.residency === 'live'
+    && (state.turn.kind === 'provisioning' || state.turn.kind === 'running' || state.turn.kind === 'waiting')
 }
 
 function isLongRunning(

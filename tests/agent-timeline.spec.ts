@@ -44,6 +44,24 @@ function ids(rows: TimelineDisplayRow[]): string[] {
 }
 
 describe('agent timeline client projection', () => {
+  it('keeps a completed root active for its observed work interval', () => {
+    const result: AgentTimelineResult = {
+      root: { sessionId: 'root', path: '/root', startedAt: 2_000, lastEventAt: 8_000 },
+      asOfSeq: 3,
+      agents: [],
+    }
+
+    const root = buildTimelineDisplay({ timeline: result, rootRunning: false, now: 20_000 }).rows[0]!
+
+    expect(root.state).toEqual({ residency: 'live', turn: { kind: 'completed', stopReason: 'completed' } })
+    expect(root.segments).toEqual([
+      { start: 2_000, end: 8_000, state: state('running') },
+    ])
+    expect(root.activeDurationMs).toBe(6_000)
+    expect(root.wallDurationMs).toBe(6_000)
+    expect(root.endedAt).toBe(8_000)
+  })
+
   it('does not invent a running root segment before the first turn starts', () => {
     const result: AgentTimelineResult = {
       root: { sessionId: 'root', path: '/root', startedAt: null, lastEventAt: 5_000 },
@@ -93,6 +111,58 @@ describe('agent timeline client projection', () => {
     expect(legacy.path).toBeUndefined()
     expect(legacy.model).toBeUndefined()
     expect(legacy.startedAt).toBeUndefined()
+  })
+
+  it('caps a stale running span at the observed cold time before a later close', () => {
+    const stale = agent({
+      sessionId: 'stale-worker',
+      parentSessionId: 'root',
+      path: '/root/stale-worker',
+      declaredAt: 1_000,
+      declarationSeq: 1,
+      state: { residency: 'closed' },
+      statePoints: [
+        { seq: 2, time: 2_000, transition: 'ready', state: state('running') },
+        { seq: 3, time: 10_000, transition: 'closed', state: { residency: 'closed' } },
+      ],
+      tailObservation: { time: 5_000, state: { residency: 'cold', lastTurn: 'idle' } },
+    })
+
+    const row = buildTimelineDisplay({ timeline: timeline([stale]), now: 20_000 })
+      .rows.find(item => item.id === 'stale-worker')!
+
+    expect(row.segments).toEqual([
+      { start: 1_000, end: 2_000, state: state('provisioning') },
+      { start: 2_000, end: 5_000, state: state('running') },
+      { start: 5_000, end: 10_000, state: { residency: 'cold', lastTurn: 'idle' } },
+      { start: 10_000, end: 10_000, state: { residency: 'closed' } },
+    ])
+    expect(row.activeDurationMs).toBe(4_000)
+    expect(row.wallDurationMs).toBe(9_000)
+  })
+
+  it('does not count settled live tails as active work', () => {
+    const result = timeline([
+      agent({
+        sessionId: 'settled-worker',
+        parentSessionId: 'root',
+        path: '/root/settled-worker',
+        declaredAt: 1_000,
+        declarationSeq: 1,
+        state: { residency: 'cold', lastTurn: 'completed' },
+        statePoints: [
+          { seq: 2, time: 2_000, transition: 'ready', state: state('running') },
+          { seq: 3, time: 5_000, transition: 'turn-settled', state: state('completed') },
+          { seq: 4, time: 8_000, transition: 'became-cold', state: { residency: 'cold', lastTurn: 'completed' } },
+        ],
+      }),
+    ])
+
+    const row = buildTimelineDisplay({ timeline: result, now: 20_000 })
+      .rows.find(item => item.id === 'settled-worker')!
+
+    expect(row.activeDurationMs).toBe(4_000)
+    expect(row.wallDurationMs).toBe(7_000)
   })
 
   it('builds ordered non-overlapping live/cold/live/closed segments and separates active from wall duration', () => {
@@ -253,9 +323,21 @@ describe('agent timeline client projection', () => {
     expect(timelineContentEnd([], 30_000)).toBeUndefined()
   })
 
-  it('formats all dashboard states including cold as unloaded in both locales', () => {
-    expect(formatAgentState({ residency: 'cold', lastTurn: 'idle' }, 'zh')).toBe('已卸载')
-    expect(formatAgentState({ residency: 'cold', lastTurn: 'idle' }, 'en')).toBe('Unloaded')
+  it('keeps the primary cold state concise in both locales', () => {
+    expect((['idle', 'completed', 'interrupted', 'errored'] as const).map(lastTurn =>
+      formatAgentState({ residency: 'cold', lastTurn }, 'zh'))).toEqual([
+      '已卸载',
+      '已卸载',
+      '已卸载',
+      '已卸载',
+    ])
+    expect((['idle', 'completed', 'interrupted', 'errored'] as const).map(lastTurn =>
+      formatAgentState({ residency: 'cold', lastTurn }, 'en'))).toEqual([
+      'Unloaded',
+      'Unloaded',
+      'Unloaded',
+      'Unloaded',
+    ])
     expect([
       state('provisioning'),
       state('running'),
