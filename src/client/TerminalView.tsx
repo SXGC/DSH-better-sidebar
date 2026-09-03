@@ -47,6 +47,30 @@ import css from './sidebar.module.css'
 /** How many consecutive unreasoned failures before showing the error banner. */
 const FAILURE_LIMIT = 3
 
+function readRememberedGrid(key: string): { cols: number; rows: number } | null {
+  try {
+    const raw = sessionStorage.getItem(key)
+    if (raw === null) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed === null || typeof parsed !== 'object') return null
+    const cols = (parsed as { cols?: unknown }).cols
+    const rows = (parsed as { rows?: unknown }).rows
+    if (typeof cols !== 'number' || typeof rows !== 'number') return null
+    if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols < 2 || rows < 2) return null
+    return { cols: Math.floor(cols), rows: Math.floor(rows) }
+  } catch {
+    return null
+  }
+}
+
+function rememberGrid(key: string, dimensions: { cols: number; rows: number }): void {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(dimensions))
+  } catch {
+    // Quota or private-mode storage failures must not break the terminal.
+  }
+}
+
 /**
  * The WS close-code-1011 reason the host sends when node-pty is unavailable
  * (mirror of the host's PTY_DEPS_MISSING; the value is a wire contract, so
@@ -121,6 +145,8 @@ export function TerminalView(props: { scope: SessionScope; tabId: string; store:
     // The custom font prefs (side card settings, terminal card) resolve at
     // mount; store changes re-apply them live below.
     const font = resolveTerminalFont(store.getPrefs(), tokenValue('--ds-font-family-code'))
+    const replayKey = `dsh-better-sidebar:term-grid:${scope.sessionId}:${tabId}`
+    const remembered = readRememberedGrid(replayKey)
     const term = new Terminal({
       cursorBlink: true,
       fontSize: font.fontSize,
@@ -128,6 +154,8 @@ export function TerminalView(props: { scope: SessionScope; tabId: string; store:
       allowTransparency: true,
       convertEol: false,
       scrollback: 4000,
+      cols: remembered?.cols ?? 80,
+      rows: remembered?.rows ?? 24,
       theme: xtermTheme(),
     })
     const fit = new FitAddon()
@@ -143,7 +171,11 @@ export function TerminalView(props: { scope: SessionScope; tabId: string; store:
     let closed = false
     let retry: number | undefined
     let failures = 0
-    let lastDimensions: { cols: number; rows: number } | null = null
+    let lastDimensions: { cols: number; rows: number } | null = remembered
+    let holdFit = remembered !== null
+    let replayPending = 0
+    let replayBuffer: string[] = []
+    let holdTimer: number | undefined
 
     const wsUrl = (): string => {
       const url = new URL('/sidebar/ws/terminal', location.origin)
@@ -166,9 +198,40 @@ export function TerminalView(props: { scope: SessionScope; tabId: string; store:
 
     const sendResize = (dimensions: { cols: number; rows: number }): void => {
       lastDimensions = dimensions
+      rememberGrid(replayKey, dimensions)
       if (socket !== null && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'resize', ...dimensions }))
       }
+    }
+
+    const releaseReplayHold = (): void => {
+      if (!holdFit) return
+      holdFit = false
+      if (holdTimer !== undefined) window.clearTimeout(holdTimer)
+      const queued = replayBuffer
+      replayBuffer = []
+      for (const chunk of queued) term.write(chunk)
+      try {
+        controllerRef.current?.requestFit()
+      } catch {
+        // The terminal may be mid-dispose; ignore.
+      }
+    }
+
+    const writeOutput = (chunk: string): void => {
+      if (holdFit && replayPending === 0) {
+        replayPending = 1
+        term.write(chunk, () => {
+          replayPending = 0
+          releaseReplayHold()
+        })
+        return
+      }
+      if (holdFit) {
+        replayBuffer.push(chunk)
+        return
+      }
+      term.write(chunk)
     }
 
     const connect = (): void => {
@@ -181,9 +244,14 @@ export function TerminalView(props: { scope: SessionScope; tabId: string; store:
         setConnected(true)
         setFatal(null)
         if (lastDimensions !== null) sendResize(lastDimensions)
+        if (holdFit) {
+          holdTimer = window.setTimeout(() => {
+            if (replayPending === 0) releaseReplayHold()
+          }, 250)
+        }
       }
       socket.onmessage = (event) => {
-        if (typeof event.data === 'string') term.write(event.data)
+        if (typeof event.data === 'string') writeOutput(event.data)
       }
       socket.onclose = (event) => {
         setConnected(false)
@@ -238,6 +306,7 @@ export function TerminalView(props: { scope: SessionScope; tabId: string; store:
       isConnected: () => host.isConnected,
       open: () => { term.open(host) },
       fit: () => { fit.fit() },
+      canFit: () => !holdFit,
       dimensions: () => ({ cols: term.cols, rows: term.rows }),
       sendResize,
       requestFrame: callback => requestAnimationFrame(callback),
@@ -277,6 +346,7 @@ export function TerminalView(props: { scope: SessionScope; tabId: string; store:
       controller.dispose()
       if (controllerRef.current === controller) controllerRef.current = null
       window.clearTimeout(retry)
+      if (holdTimer !== undefined) window.clearTimeout(holdTimer)
       observer.disconnect()
       fontSub()
       schemeSub()

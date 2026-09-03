@@ -63,6 +63,8 @@
 
 控制器只提交经过验证且去重的实际网格。若 fit 发生在 WebSocket 建立前，`TerminalView` 缓存该网格，并在 `onopen` 时补发；连接建立时不再无条件发送 xterm 默认尺寸。消息 schema 保持 `{ type: 'resize', cols, rows }`。
 
+会话切换会卸载并重建 xterm。重连时 host 立即重放 transcript。为避免在默认或当前窄列宽下重新解析 `\r` 进度，`TerminalView` 记住上次成功网格，先按该网格写入历史输出，再允许 fit 到当前容器。
+
 ## 4. 生命周期边界
 
 - 主 React effect 依赖仍为 session、cwd、tabId 和 store；`visible` 不触发终端重建。

@@ -17,6 +17,7 @@ export interface TerminalFitAdapter {
   sendResize(dimensions: TerminalDimensions): void
   requestFrame(callback: () => void): number
   cancelFrame(frameId: number): void
+  canFit?(): boolean
 }
 
 export interface TerminalFitController {
@@ -45,21 +46,23 @@ export function createTerminalFitController(
 
   const validBox = (box: TerminalBox): boolean => box.width > 0 && box.height > 0
 
-  const fitAndResize = (): boolean => {
-    if (state === 'hidden' || state === 'disposed' || !adapter.isConnected()) return false
+  const fitAndResize = (): 'done' | 'wait' | 'invalid' => {
+    if (state === 'hidden' || state === 'disposed') return 'wait'
+    if (!adapter.isConnected()) return 'wait'
     const box = adapter.measure()
-    if (!validBox(box)) return false
+    if (!validBox(box)) return 'invalid'
     if (!opened) {
       adapter.open()
       opened = true
     }
+    if (adapter.canFit?.() === false) return 'wait'
     adapter.fit()
     const dimensions = adapter.dimensions()
-    if (dimensions.cols <= 0 || dimensions.rows <= 0) return false
-    if (lastSent?.cols === dimensions.cols && lastSent.rows === dimensions.rows) return true
+    if (dimensions.cols <= 0 || dimensions.rows <= 0) return 'invalid'
+    if (lastSent?.cols === dimensions.cols && lastSent.rows === dimensions.rows) return 'done'
     lastSent = { ...dimensions }
     adapter.sendResize(dimensions)
-    return true
+    return 'done'
   }
 
   const settle = (): void => {
@@ -82,7 +85,12 @@ export function createTerminalFitController(
         return
       }
       try {
-        if (!fitAndResize()) {
+        const result = fitAndResize()
+        if (result === 'wait') {
+          frame = adapter.requestFrame(check)
+          return
+        }
+        if (result === 'invalid') {
           previous = null
           frame = adapter.requestFrame(check)
           return

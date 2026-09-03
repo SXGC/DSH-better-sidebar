@@ -107,6 +107,21 @@ describe('terminal fit controller', () => {
     expect(harness.calls.sent).toEqual([{ cols: 100, rows: 30 }])
   })
 
+  it('opens the host but waits to fit while canFit is false', () => {
+    const harness = makeHarness()
+    let allowFit = false
+    harness.adapter.canFit = () => allowFit
+    createTerminalFitController(harness.adapter, true)
+    settle(harness)
+    expect(harness.calls.open).toBe(1)
+    expect(harness.calls.fit).toBe(0)
+    expect(harness.calls.sent).toEqual([])
+    allowFit = true
+    harness.tick()
+    expect(harness.calls.fit).toBe(1)
+    expect(harness.calls.sent).toEqual([{ cols: 100, rows: 30 }])
+  })
+
   it('restarts settling when the commit-time measurement becomes invalid', () => {
     const harness = makeHarness()
     const measure = harness.adapter.measure
@@ -241,6 +256,23 @@ describe('terminal fit controller', () => {
     expect(lines.some(line => line.includes('remote: Counting objects: 100%'))).toBe(true)
     expect(Array.from({ length: term.buffer.active.length }, (_, index) => term.buffer.active.getLine(index)?.isWrapped)
       .filter(Boolean).length).toBe(0)
+    term.dispose()
+  })
+
+  it('replays carriage-return progress at the remembered grid without concatenating', async () => {
+    const term = new Terminal({ cols: 80, rows: 24 })
+    await new Promise<void>(resolve => term.write(
+      'remote: Resolving deltas:  23% (27/116)\rremote: Resolving deltas:  50% (58/116)\rremote: Resolving deltas: 100% (116/116)\r\n',
+      resolve,
+    ))
+    const before = Array.from({ length: term.buffer.active.length }, (_, index) =>
+      term.buffer.active.getLine(index)?.translateToString(true) ?? '')
+    expect(before.filter(line => line.includes('remote:')).length).toBe(1)
+    expect(before.some(line => line.includes('116Resolving'))).toBe(false)
+    term.resize(28, 24)
+    const after = Array.from({ length: term.buffer.active.length }, (_, index) =>
+      term.buffer.active.getLine(index)?.translateToString(true) ?? '')
+    expect(after.some(line => line.includes('116Resolving'))).toBe(false)
     term.dispose()
   })
 
