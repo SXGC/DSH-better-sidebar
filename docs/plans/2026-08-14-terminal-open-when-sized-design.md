@@ -51,9 +51,7 @@
 
 ### 3.3 活动缩放
 
-进入 `ready` 后，多个 `requestFit()` 合并到一个 animation frame。执行时再次验证 host 连接和正尺寸，然后调用 `fit()`。只有 xterm 的 `cols` 或 `rows` 真正改变时才发送 PTY resize。
-
-这条路径用于活动面板拖动、字体变化和自由窗口缩放，不等待两个稳定 frame，因此保持原有实时反馈。
+进入 `ready` 后，新的 `requestFit()` 仍走稳定尺寸规则：拖动、字体变化和自由窗口缩放都回到 `settling`，等待连续两个 animation frame 的宽高相同后再 `fit()`。中间宽度不改变 xterm 网格，也不发送 PTY resize。只有稳定后的 `cols` 或 `rows` 真正改变时才发送一次 resize。
 
 ### 3.4 隐藏期间输出
 

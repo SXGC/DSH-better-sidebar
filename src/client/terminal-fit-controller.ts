@@ -95,17 +95,6 @@ export function createTerminalFitController(
     frame = adapter.requestFrame(check)
   }
 
-  const requestReadyFit = (): void => {
-    if (frame !== null) return
-    frame = adapter.requestFrame(() => {
-      frame = null
-      if (state !== 'ready') return
-      try {
-        fitAndResize()
-      } catch {}
-    })
-  }
-
   if (state === 'settling') settle()
 
   return {
@@ -124,8 +113,8 @@ export function createTerminalFitController(
     },
     requestFit() {
       if (state === 'disposed' || state === 'hidden') return
-      if (state === 'settling') settle()
-      else requestReadyFit()
+      state = 'settling'
+      settle()
     },
     dispose() {
       if (state === 'disposed') return

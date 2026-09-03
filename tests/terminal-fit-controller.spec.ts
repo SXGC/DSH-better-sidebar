@@ -139,20 +139,25 @@ describe('terminal fit controller', () => {
     expect(harness.pending()).toBe(0)
   })
 
-  it('coalesces active resize requests into one frame and sends changed grids once', () => {
+  it('waits for two quiet equal frames before sending a visible drag resize', () => {
     const harness = makeHarness()
     const controller = createTerminalFitController(harness.adapter, true)
     settle(harness)
-    harness.setDimensions({ cols: 120, rows: 40 })
+    harness.setBox({ width: 400, height: 480 })
+    harness.setDimensions({ cols: 50, rows: 30 })
     controller.requestFit()
+    harness.tick()
+    harness.setBox({ width: 200, height: 480 })
+    harness.setDimensions({ cols: 25, rows: 30 })
     controller.requestFit()
-    controller.requestFit()
-    expect(harness.pending()).toBe(1)
+    harness.tick()
+    expect(harness.calls.fit).toBe(1)
+    expect(harness.calls.sent).toEqual([{ cols: 100, rows: 30 }])
     harness.tick()
     expect(harness.calls.fit).toBe(2)
     expect(harness.calls.sent).toEqual([
       { cols: 100, rows: 30 },
-      { cols: 120, rows: 40 },
+      { cols: 25, rows: 30 },
     ])
   })
 
@@ -162,7 +167,7 @@ describe('terminal fit controller', () => {
     settle(harness)
     harness.setBox({ width: 804, height: 480 })
     controller.requestFit()
-    harness.tick()
+    settle(harness)
     expect(harness.calls.fit).toBe(2)
     expect(harness.calls.sent).toEqual([{ cols: 100, rows: 30 }])
   })
@@ -180,7 +185,7 @@ describe('terminal fit controller', () => {
 
     controller.requestFit()
     controller.requestFit()
-    harness.tick()
+    settle(harness)
     expect(harness.calls.fit).toBe(3)
   })
 
@@ -234,6 +239,38 @@ describe('terminal fit controller', () => {
       term.buffer.active.getLine(index)?.translateToString(true) ?? '')
     expect(lines.filter(line => line.includes('remote:')).length).toBe(1)
     expect(lines.some(line => line.includes('remote: Counting objects: 100%'))).toBe(true)
+    expect(Array.from({ length: term.buffer.active.length }, (_, index) => term.buffer.active.getLine(index)?.isWrapped)
+      .filter(Boolean).length).toBe(0)
+    term.dispose()
+  })
+
+  it('keeps carriage-return progress on one logical line during a visible drag', async () => {
+    const term = new Terminal({ cols: 80, rows: 24 })
+    const harness = makeHarness()
+    harness.adapter.fit = () => {
+      harness.calls.fit += 1
+      const box = harness.adapter.measure()
+      term.resize(box.width < 400 ? 28 : 80, 24)
+    }
+    harness.adapter.dimensions = () => ({ cols: term.cols, rows: term.rows })
+    const controller = createTerminalFitController(harness.adapter, true)
+    settle(harness)
+    await new Promise<void>(resolve => term.write('remote: Compressing objects:  75% (812/1082)\r', resolve))
+
+    harness.setBox({ width: 280, height: 480 })
+    controller.requestFit()
+    harness.tick()
+    await new Promise<void>(resolve => term.write('remote: Compressing objects:  90% (974/1082)\r', resolve))
+    harness.setBox({ width: 160, height: 480 })
+    controller.requestFit()
+    harness.tick()
+    await new Promise<void>(resolve => term.write('remote: Compressing objects:  100% (1082/1082)\r\n', resolve))
+
+    expect(term.cols).toBe(80)
+    const lines = Array.from({ length: term.buffer.active.length }, (_, index) =>
+      term.buffer.active.getLine(index)?.translateToString(true) ?? '')
+    expect(lines.filter(line => line.includes('remote:')).length).toBe(1)
+    expect(lines.some(line => line.includes('remote: Compressing objects:  100%'))).toBe(true)
     expect(Array.from({ length: term.buffer.active.length }, (_, index) => term.buffer.active.getLine(index)?.isWrapped)
       .filter(Boolean).length).toBe(0)
     term.dispose()
